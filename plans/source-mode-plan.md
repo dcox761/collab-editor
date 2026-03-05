@@ -38,7 +38,7 @@ graph TD
 | Toggle scope | Per-editor, not global | Each tab can independently be in rich or source mode |
 | Toggle state storage | React state in MarkdownEditor | Simple; no need to persist across sessions yet |
 | Source editor - phase 1a | Plain textarea | Zero dependencies, trivial to implement |
-| Content sync on toggle | Serialize/parse on mode switch | Rich→Source: blocksToMarkdownLossy. Source→Rich: tryParseMarkdownToBlocks |
+| Content sync on toggle | Serialize/parse on mode switch | Rich→Source: blocksToMarkdownLossy (normalized). Source→Rich: tryParseMarkdownToBlocks. Skips re-serialization if no rich edits occurred. |
 | Unsaved state | Same isDirty tracking as today | Both modes feed into the same onChange callback |
 
 ### Files to Modify

@@ -39,3 +39,40 @@ Safety net: `markSaved()` now returns early without making a server request if t
 
 ### Lesson Learned
 Never use `setState(prev => { /* read prev */; return prev; })` to read current state in React 18+. The updater function execution is deferred during batching and is not guaranteed to run synchronously. Use `useRef` mirroring instead for synchronous reads outside of the render cycle.
+
+---
+
+## DEV-ISSUE-002: Lossy markdown formatting on mode toggle
+
+**Date**: 2026-03-05
+**Severity**: Medium — unwanted file modifications
+**Status**: Fixed
+**Affected file**: `src/client/components/Editor/MarkdownEditor.tsx`
+
+### Symptom
+Opening a markdown file (e.g. `nested-doc.md`), making a minor edit in rich mode, then switching to source mode and back, caused formatting changes on save:
+- List markers changed from `- ` to `*   ` (star + 3 spaces)
+- Code fence language specifiers stripped (`` ```javascript `` → `` ``` ``)
+- File marked as dirty even when no user edits occurred
+
+### Root Cause
+Two interacting problems in `MarkdownEditor.tsx`:
+
+1. **No onChange suppression during programmatic block replacements.** `editor.replaceBlocks()` (called during initial load and source→rich sync) triggers BlockNote's `onChange` callback, which serialized the document via `blocksToMarkdownLossy()` and emitted the lossy output to the parent. This marked the file dirty immediately on open.
+
+2. **Unconditional lossy re-serialization on every mode toggle.** Switching rich→source always called `blocksToMarkdownLossy()`, even if the user made no edits in rich mode. BlockNote's serializer normalizes list markers to `*   ` and may strip code fence language hints, producing different markdown from the original file.
+
+### Fix
+Three changes to `MarkdownEditor.tsx`:
+
+1. **`normalizeMarkdown()` post-processor** — A function that runs `blocksToMarkdownLossy()` output through a regex to convert `*   ` list items back to `- ` (the common convention). Applied everywhere serialization occurs.
+
+2. **`suppressOnChangeRef`** — A ref that blocks `handleRichChange` from firing during programmatic `replaceBlocks()` calls (initial load and source→rich sync). Uses `setTimeout(() => { suppressOnChangeRef.current = false }, 0)` to re-enable after BlockNote's microtask fires.
+
+3. **`richEditedRef` + `lastMarkdownRef`** — `richEditedRef` tracks whether the user actually typed in rich mode. `lastMarkdownRef` stores the last known canonical markdown (from file load or source-mode edits). When toggling rich→source, if `richEditedRef` is false, the source textarea receives `lastMarkdownRef` instead of a lossy re-serialization. This preserves the original formatting exactly when no rich edits occurred.
+
+### Lesson Learned
+BlockNote's `blocksToMarkdownLossy()` is intentionally lossy — it normalizes formatting to its own conventions. When round-trip fidelity matters:
+- **Post-process** the output to enforce your preferred conventions (e.g. dash list markers)
+- **Avoid unnecessary serialization** — track whether the user actually edited, and skip re-serialization when they didn't
+- **Suppress onChange during programmatic mutations** — `replaceBlocks()` triggers onChange just like user edits; gate the handler with a ref

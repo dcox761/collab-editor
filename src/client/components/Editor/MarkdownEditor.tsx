@@ -6,6 +6,15 @@ import '@blocknote/mantine/style.css';
 
 type EditorMode = 'rich' | 'source';
 
+/**
+ * Normalize BlockNote's lossy markdown output to use common conventions:
+ * - Convert "*   text" list items to "- text" (BlockNote emits star+3-space)
+ * - Preserves nested list indentation
+ */
+function normalizeMarkdown(md: string): string {
+  return md.replace(/^(\s*)\*   /gm, '$1- ');
+}
+
 interface MarkdownEditorProps {
   content: string;
   onChange: (markdown: string) => void;
@@ -21,6 +30,13 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
   const initialContentRef = useRef(content);
   // Pending markdown to load into BlockNote after the view mounts
   const pendingMarkdownRef = useRef<string | null>(null);
+  // Suppress onChange during programmatic block replacements (init + source→rich sync)
+  const suppressOnChangeRef = useRef(false);
+  // Track whether user has actually edited in rich mode since last mode switch
+  const richEditedRef = useRef(false);
+  // Last known "canonical" markdown — original file content or last source-mode text.
+  // Used when toggling to source without edits to avoid re-serialization.
+  const lastMarkdownRef = useRef(content);
 
   // Load markdown content into the editor once on mount
   // (component remounts via key={path} when switching files, so this runs per-file)
@@ -28,14 +44,17 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
     let cancelled = false;
     async function loadContent() {
       try {
-        console.log('[DEBUG-SAVE] loadContent starting, initialContent length:', initialContentRef.current.length);
         const blocks = await editor.tryParseMarkdownToBlocks(initialContentRef.current);
         if (!cancelled) {
-          console.log('[DEBUG-SAVE] loadContent replacing blocks, parsed block count:', blocks.length);
+          suppressOnChangeRef.current = true;
           editor.replaceBlocks(editor.document, blocks);
+          // Allow a tick for BlockNote to fire (and discard) the spurious onChange
+          setTimeout(() => {
+            suppressOnChangeRef.current = false;
+          }, 0);
           setSourceText(initialContentRef.current);
+          lastMarkdownRef.current = initialContentRef.current;
           setInitialized(true);
-          console.log('[DEBUG-SAVE] loadContent complete, initialized=true');
         }
       } catch (err) {
         console.error('Error parsing markdown:', err);
@@ -55,31 +74,30 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
 
     async function applyPending() {
       try {
+        suppressOnChangeRef.current = true;
         const blocks = await editor.tryParseMarkdownToBlocks(markdown);
         editor.replaceBlocks(editor.document, blocks);
+        setTimeout(() => {
+          suppressOnChangeRef.current = false;
+        }, 0);
       } catch (err) {
         console.error('Error applying source changes to rich editor:', err);
+        suppressOnChangeRef.current = false;
       }
     }
     applyPending();
   }, [mode, editor]);
 
-  // Rich mode onChange — serialize blocks to markdown
+  // Rich mode onChange — serialize blocks to normalized markdown
   const handleRichChange = useCallback(async () => {
-    if (!initialized) {
-      console.warn('[DEBUG-SAVE] handleRichChange skipped — not yet initialized');
+    if (!initialized || suppressOnChangeRef.current) {
       return;
     }
     try {
-      const markdown = await editor.blocksToMarkdownLossy(editor.document);
-      if (markdown.trim() === '') {
-        console.warn('[DEBUG-SAVE] handleRichChange produced EMPTY markdown!', {
-          blockCount: editor.document.length,
-          firstBlock: JSON.stringify(editor.document[0]),
-        });
-      } else {
-        console.log('[DEBUG-SAVE] handleRichChange produced markdown, length:', markdown.length);
-      }
+      richEditedRef.current = true;
+      const raw = await editor.blocksToMarkdownLossy(editor.document);
+      const markdown = normalizeMarkdown(raw);
+      lastMarkdownRef.current = markdown;
       onChange(markdown);
     } catch (err) {
       console.error('Error converting to markdown:', err);
@@ -91,6 +109,7 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const value = e.target.value;
       setSourceText(value);
+      lastMarkdownRef.current = value;
       onChange(value);
     },
     [onChange]
@@ -109,6 +128,7 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
 
         const newValue = value.substring(0, start) + indent + value.substring(end);
         setSourceText(newValue);
+        lastMarkdownRef.current = newValue;
         onChange(newValue);
 
         // Restore cursor position after React re-render
@@ -123,22 +143,33 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
   // Toggle between rich and source modes with content sync
   const handleToggle = useCallback(async () => {
     if (mode === 'rich') {
-      // Rich → Source: serialize current blocks to markdown
-      try {
-        const markdown = await editor.blocksToMarkdownLossy(editor.document);
-        setSourceText(markdown);
-        setMode('source');
-        // Focus textarea after mode switch
-        requestAnimationFrame(() => {
-          textareaRef.current?.focus();
-        });
-      } catch (err) {
-        console.error('Error serializing to markdown:', err);
+      // Rich → Source: only re-serialize if user actually edited in rich mode.
+      // This avoids lossy formatting changes when the user merely viewed the document.
+      if (richEditedRef.current) {
+        try {
+          const raw = await editor.blocksToMarkdownLossy(editor.document);
+          const markdown = normalizeMarkdown(raw);
+          lastMarkdownRef.current = markdown;
+          setSourceText(markdown);
+        } catch (err) {
+          console.error('Error serializing to markdown:', err);
+        }
+      } else {
+        // No edits in rich mode — preserve the last known markdown exactly
+        setSourceText(lastMarkdownRef.current);
       }
+      richEditedRef.current = false;
+      setMode('source');
+      // Focus textarea after mode switch
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
     } else {
       // Source → Rich: queue the markdown and switch mode;
       // the useEffect on mode will apply it after BlockNoteView mounts
       pendingMarkdownRef.current = sourceText;
+      lastMarkdownRef.current = sourceText;
+      richEditedRef.current = false;
       setMode('rich');
     }
   }, [mode, editor, sourceText]);
