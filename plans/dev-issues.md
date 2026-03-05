@@ -345,3 +345,38 @@ send(ws, message);  // Sends TO this client (the one that needs it)
 
 ### Lesson Learned
 When using per-connection event handlers on a shared Y.Doc, each handler represents **one client's perspective**. The handler should send updates **to** its own client, not broadcast to everyone else. The broadcast pattern works when there's a single doc-level handler, but with per-connection handlers, the `exclude` parameter inverts the intent — it excludes the very client that the handler is responsible for.
+
+---
+
+## DEV-ISSUE-011: Externally reverted file shows stale content on reopen
+
+**Date**: 2026-03-05
+**Severity**: High — stale content displayed and persisted, overwriting external changes
+**Status**: Fixed
+**Affected files**: `src/server/services/yjsService.ts`, `src/server/services/yjsPersistence.ts`, `src/server/ws/yjsHandler.ts`
+
+### Symptom
+Opening a document, saving it (Ctrl+S), closing the tab, reverting the file on the OS (e.g. `git checkout`, manual edit, or restoring a backup), then reopening the file in the editor showed the **old saved version** instead of the reverted filesystem content.
+
+### Root Cause
+Two compounding issues in the server-side Y.js document lifecycle:
+
+1. **30-second grace period prevents disk re-read.** When the last client disconnects, `removeClient()` in `yjsService.ts` schedules room destruction after `CLEANUP_DELAY_MS = 30_000` (30 seconds). If the user reopens the file within that window, `getOrCreateDoc()` finds the existing room (`isNew: false`) and returns the stale in-memory Y.Doc — `loadDocFromDisk()` is never called. External filesystem changes are invisible.
+
+2. **Cleanup callback unconditionally overwrites disk.** When the grace period expires, the cleanup callback in `yjsHandler.ts` always called `saveDocToDisk()` before destroying the room — even if no user edits had occurred since the last save. This wrote the stale in-memory content back to disk, overwriting the OS-level revert. So even waiting longer than 30 seconds didn't help: the file on disk was already overwritten by the time the room was destroyed.
+
+### Fix
+Three coordinated changes:
+
+1. **`yjsService.ts` — `getOrCreateDoc()` returns `wasGracePeriod` flag.** When a room is found with a pending cleanup timer (idle, no clients), the timer is cancelled and a `wasGracePeriod: true` flag is returned alongside the doc. This lets the caller know the room was idle and may have stale content.
+
+2. **`yjsPersistence.ts` — New `reloadDocFromDisk()` and `isDirty()` functions.**
+   - `reloadDocFromDisk()` reads the file from disk, compares to in-memory Y.Text content, and if they differ, replaces the Y.Doc content via `yText.delete()` + `yText.insert()` in a single transaction. If the file was deleted externally, the doc is cleared. If content matches, the reload is skipped (no-op). The dirty flag is cleared after reload since the doc now matches disk.
+   - `isDirty()` returns whether a room has unsaved user edits (exists in the `dirtyDocs` set).
+
+3. **`yjsHandler.ts` — Grace period reload + conditional cleanup save.**
+   - When `wasGracePeriod` is true, `handleConnection()` calls `reloadDocFromDisk()` before proceeding with the sync protocol. This picks up any external filesystem changes.
+   - The cleanup callback now checks `isDirty()` before saving. If the room has no unsaved edits, the save is skipped entirely, preventing stale content from overwriting externally modified files.
+
+### Lesson Learned
+In-memory document caches with grace periods must be **revalidated against the filesystem** when reactivated. A "last client disconnected → grace period → new client connects" cycle is equivalent to a fresh open from the user's perspective — the file may have changed externally. Additionally, cleanup routines should only write to disk if there are actual unsaved changes; unconditional saves can destroy external modifications made during the idle window.

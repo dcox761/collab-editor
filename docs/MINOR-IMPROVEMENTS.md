@@ -1,6 +1,7 @@
 - adjustable window width
 - prompt for username if not set, store in browser local storage
 - change username
+- allow separate browser window/private to have a different user
 - keep scroll and cursor position switching source to review
 - OR open preview to side and sync position
 - undo/version history since auto-save could save mistakes by accident

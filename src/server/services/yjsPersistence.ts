@@ -58,6 +58,59 @@ export async function loadDocFromDisk(roomName: string, doc: Y.Doc): Promise<voi
 }
 
 /**
+ * Re-read the file from disk and replace the Y.Doc content if it differs.
+ * Called when a room is revived from the grace period to pick up any
+ * external filesystem changes (e.g. git checkout, OS-level revert).
+ */
+export async function reloadDocFromDisk(roomName: string, doc: Y.Doc): Promise<void> {
+  try {
+    const diskContent = await readFileContent(docsPath, roomName);
+    const yText = doc.getText('document');
+    const memContent = yText.toString();
+
+    if (diskContent === memContent) {
+      console.log(`[Y.js Persistence] Reload skipped (unchanged on disk): ${roomName}`);
+      return;
+    }
+
+    console.log(
+      `[Y.js Persistence] Disk content differs for ${roomName} — ` +
+      `memory: ${memContent.length} chars, disk: ${diskContent.length} chars. Replacing.`
+    );
+
+    doc.transact(() => {
+      yText.delete(0, yText.length);
+      yText.insert(0, diskContent);
+    });
+
+    // Clear dirty flag since we just synced from disk
+    dirtyDocs.delete(roomName);
+  } catch (err: any) {
+    if (err.code === 'ENOENT') {
+      // File was deleted externally — clear doc content
+      const yText = doc.getText('document');
+      if (yText.length > 0) {
+        doc.transact(() => {
+          yText.delete(0, yText.length);
+        });
+        console.log(`[Y.js Persistence] File deleted externally, cleared doc: ${roomName}`);
+      }
+      dirtyDocs.delete(roomName);
+    } else {
+      console.error(`[Y.js Persistence] Error reloading ${roomName}:`, err);
+      // Non-fatal — keep the in-memory version
+    }
+  }
+}
+
+/**
+ * Check whether a room has unsaved changes.
+ */
+export function isDirty(roomName: string): boolean {
+  return dirtyDocs.has(roomName);
+}
+
+/**
  * Save a Y.Doc's Y.Text content to disk.
  * Called by the periodic save loop and on room cleanup.
  */

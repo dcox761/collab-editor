@@ -23,17 +23,20 @@ export function getDoc(roomName: string): Y.Doc | null {
 
 /**
  * Get or create a Y.Doc for the given room.
- * Returns the doc and whether it was newly created.
+ * Returns the doc, whether it was newly created, and whether it was
+ * recovered from the grace-period (no active clients, cleanup pending).
  */
-export function getOrCreateDoc(roomName: string): { doc: Y.Doc; isNew: boolean } {
+export function getOrCreateDoc(roomName: string): { doc: Y.Doc; isNew: boolean; wasGracePeriod: boolean } {
   const existing = rooms.get(roomName);
   if (existing) {
+    const wasGracePeriod = existing.cleanupTimer !== null;
     // Cancel any pending cleanup since a new connection is arriving
     if (existing.cleanupTimer) {
       clearTimeout(existing.cleanupTimer);
       existing.cleanupTimer = null;
+      console.log(`[Y.js] Room revived from grace period: ${roomName}`);
     }
-    return { doc: existing.doc, isNew: false };
+    return { doc: existing.doc, isNew: false, wasGracePeriod };
   }
 
   const doc = new Y.Doc({ gc: true });
@@ -44,7 +47,7 @@ export function getOrCreateDoc(roomName: string): { doc: Y.Doc; isNew: boolean }
   });
 
   console.log(`[Y.js] Created room: ${roomName}`);
-  return { doc, isNew: true };
+  return { doc, isNew: true, wasGracePeriod: false };
 }
 
 /**

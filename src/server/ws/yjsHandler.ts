@@ -13,7 +13,9 @@ import {
 } from '../services/yjsService.js';
 import {
   loadDocFromDisk,
+  reloadDocFromDisk,
   markDirty,
+  isDirty,
   saveDocToDisk,
 } from '../services/yjsPersistence.js';
 
@@ -102,7 +104,7 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
   ws.on('message', bufferListener);
 
   // Get or create the Y.Doc for this room
-  const { doc, isNew } = getOrCreateDoc(roomName);
+  const { doc, isNew, wasGracePeriod } = getOrCreateDoc(roomName);
 
   // If this is a brand new room, load content from disk
   if (isNew) {
@@ -112,6 +114,15 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
       console.error(`[Y.js WS] Failed to initialize room ${roomName}:`, err);
       ws.close(4001, 'Failed to initialize document');
       return;
+    }
+  } else if (wasGracePeriod) {
+    // Room was idle (no clients) — re-read from disk in case the file
+    // was changed externally (git checkout, OS revert, etc.)
+    try {
+      await reloadDocFromDisk(roomName, doc);
+    } catch (err) {
+      // Non-fatal: keep the in-memory version
+      console.error(`[Y.js WS] Failed to reload room ${roomName} from disk:`, err);
     }
   }
 
@@ -246,8 +257,14 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
     awarenessProtocol.removeAwarenessStates(awareness, [doc.clientID], null);
 
     removeClient(roomName, ws, async (name, d) => {
-      // Cleanup callback — save to disk and destroy awareness
-      await saveDocToDisk(name, d);
+      // Cleanup callback — only save to disk if there are unsaved user edits.
+      // This prevents overwriting external changes (e.g. OS-level revert)
+      // when the room was idle and no edits were made.
+      if (isDirty(name)) {
+        await saveDocToDisk(name, d);
+      } else {
+        console.log(`[Y.js Persistence] Skipping cleanup save (not dirty): ${name}`);
+      }
       destroyAwareness(name);
     });
   });
