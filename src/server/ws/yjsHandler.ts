@@ -133,7 +133,9 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
     syncProtocol.writeUpdate(encoder, update);
     const message = encoding.toUint8Array(encoder);
 
-    broadcastToRoom(wss, ws, roomName, message);
+    // Send directly to THIS client — this handler is per-connection,
+    // and the origin guard above prevents echoing back to the sender.
+    send(ws, message);
 
     // Mark as dirty for periodic save
     markDirty(roomName);

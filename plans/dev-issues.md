@@ -299,3 +299,49 @@ Server log now confirms: `Replaying 2 buffered message(s) for room: example/nest
 
 ### Lesson Learned
 In async WebSocket handlers, **register the message listener synchronously before any `await`**. Node's EventEmitter drops events that have no listeners — they are not queued. When async initialisation is unavoidable, use a buffer-and-replay pattern: capture incoming messages in an array during the async window, then process them after setup completes.
+
+---
+
+## DEV-ISSUE-010: Collaborative text edits not syncing between users
+
+**Date**: 2026-03-05
+**Severity**: High — core collaboration broken
+**Status**: Fixed
+**Affected file**: `src/server/ws/yjsHandler.ts`
+
+### Symptom
+Two users could connect to the same document and see each other's presence (cursors, user names in the PresenceBar), but text typed by one user never appeared for the other. The file was correctly saved to disk (char count increased in persistence logs), but the second browser window's editor remained unchanged.
+
+### Root Cause
+The `docUpdateHandler` closure in `handleConnection()` was registered **per client connection** on the shared `doc.on('update', ...)`. Each handler's closure captured its own `ws` variable — the WebSocket for that specific client.
+
+When Client A typed:
+1. Client A's sync message → server applied update to Y.Doc with `origin = ws_A`
+2. **Client A's handler** (`ws = ws_A`): `origin === ws` → `ws_A === ws_A` → correctly **skipped** (no echo)
+3. **Client B's handler** (`ws = ws_B`): `origin === ws` → `ws_A === ws_B` → **proceeded** → called `broadcastToRoom(wss, ws, roomName, message)` where `ws = ws_B` → **excluded Client B** from the broadcast
+
+Client B's handler was broadcasting to everyone *except itself* — but Client B was the one that needed the update. With only 2 clients, the update went to Client A (who already had it) and was excluded from Client B (who needed it).
+
+### Diagnosis
+Added debug logging to `docUpdateHandler` and `broadcastToRoom`:
+```
+[Y.js DEBUG] docUpdateHandler fired for room=example/nested-doc.md, origin===ws? false, will broadcast excluding ws (this client). This client IS the one that should RECEIVE the update.
+[Y.js DEBUG] broadcastToRoom room=example/nested-doc.md: sent=1, skipped(excluded)=1
+```
+This confirmed: `sent=1` (sent to the origin client that already had it), `skipped=1` (the client that needed the update was excluded).
+
+### Fix
+Changed the per-client `docUpdateHandler` from `broadcastToRoom(wss, ws, roomName, message)` to `send(ws, message)`. Each per-connection handler now sends the update directly to its own client. The `origin === ws` guard still prevents echoing back to the sender.
+
+Before:
+```typescript
+broadcastToRoom(wss, ws, roomName, message);  // Excludes THIS client
+```
+
+After:
+```typescript
+send(ws, message);  // Sends TO this client (the one that needs it)
+```
+
+### Lesson Learned
+When using per-connection event handlers on a shared Y.Doc, each handler represents **one client's perspective**. The handler should send updates **to** its own client, not broadcast to everyone else. The broadcast pattern works when there's a single doc-level handler, but with per-connection handlers, the `exclude` parameter inverts the intent — it excludes the very client that the handler is responsible for.
