@@ -297,9 +297,5 @@ The layout uses CSS flexbox:
 
 ### Bugs Fixed During Phase 1a
 
-| # | Issue | Root Cause | Fix |
-|---|-------|-----------|-----|
-| 7 | Tab switching lost unsaved edits | `EditorPanel` passed `savedContent` instead of `content` | Changed prop to use working `content` |
-| 8 | Rich mode typing duplicated characters | `useEffect` on `[content, editor]` re-ran `replaceBlocks` on every keystroke | Used `initialContentRef` + `[editor]` dependency only |
-| 9 | Source→Rich mode didn't update | `replaceBlocks` called before `BlockNoteView` mounted | `pendingMarkdownRef` + deferred `useEffect` on `[mode, editor]` |
+See [`dev-issues.md`](dev-issues.md) for full write-ups (DEV-ISSUE-001 through DEV-ISSUE-008).
 - [ ] No external service dependencies (no Git, no AI, no Forgejo)

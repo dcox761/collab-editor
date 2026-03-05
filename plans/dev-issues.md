@@ -197,3 +197,66 @@ function normalizeMarkdown(md: string): string {
 
 ### Lesson Learned
 When upgrading rich-text editor libraries, the lossy serializer output format may change subtly between versions. Any post-processing normalizer must be re-validated against the new output. Integration-test the round-trip (original markdown → parse → serialize → normalize → compare) after every editor library upgrade.
+
+---
+
+## DEV-ISSUE-006: Tab switching lost unsaved edits
+
+**Date**: 2026-03-05
+**Severity**: High — data loss
+**Status**: Fixed
+**Affected file**: `src/client/components/Editor/EditorPanel.tsx`
+
+### Symptom
+Switching between tabs discarded any unsaved edits. The user would type in one tab, switch to another, then switch back to find their changes gone.
+
+### Root Cause
+`EditorPanel` passed the `savedContent` prop (last content written to disk) to the editor instead of the working `content` (which includes unsaved edits). Every tab switch re-rendered the editor with the on-disk version, discarding in-memory changes.
+
+### Fix
+Changed the prop passed to the editor from `savedContent` to the working `content` held in the open-files state, so that unsaved edits are preserved across tab switches.
+
+### Lesson Learned
+Always distinguish between "last saved content" and "current working content" in editor state. The editor should always receive the working copy; the saved copy is only needed for dirty-state comparison and save operations.
+
+---
+
+## DEV-ISSUE-007: Rich mode typing duplicated characters
+
+**Date**: 2026-03-05
+**Severity**: High — unusable editor
+**Status**: Fixed
+**Affected file**: `src/client/components/Editor/MarkdownEditor.tsx`
+
+### Symptom
+Typing in Rich (BlockNote) mode produced duplicate characters. For example, typing "hello" would render "hheelllloo" or similar repeated input.
+
+### Root Cause
+A `useEffect` with dependencies `[content, editor]` called `editor.replaceBlocks()` to sync content into the editor. Since every keystroke triggered BlockNote's `onChange` → updated `content` state → re-triggered the effect → called `replaceBlocks()` again with the just-typed content, the editor received a programmatic replacement on every keystroke, causing duplication.
+
+### Fix
+Replaced the `[content, editor]` effect with an `initialContentRef` pattern. Content is only loaded into the editor via `replaceBlocks()` when the `editor` instance is first available (dependency: `[editor]` only). Subsequent user edits flow out via `onChange` but never loop back through `replaceBlocks()`.
+
+### Lesson Learned
+Never put an editor's content state in the dependency array of an effect that writes back to the editor — this creates a render loop. Use a ref to track initial load and only push content into the editor programmatically once (on mount or on explicit external change like tab switch).
+
+---
+
+## DEV-ISSUE-008: Source→Rich mode didn't update editor content
+
+**Date**: 2026-03-05
+**Severity**: Medium — stale content displayed
+**Status**: Fixed
+**Affected file**: `src/client/components/Editor/MarkdownEditor.tsx`
+
+### Symptom
+After editing in Source (textarea) mode and switching back to Rich (BlockNote) mode, the editor still displayed the old content. The source-mode edits were not reflected in the rich editor.
+
+### Root Cause
+`replaceBlocks()` was called immediately when the mode switched to Rich, but `BlockNoteView` had not yet mounted at that point. The blocks were replaced on an editor instance that wasn't attached to the DOM, so the visual update was lost.
+
+### Fix
+Introduced a `pendingMarkdownRef` that stores the markdown to load when switching to Rich mode. A `useEffect` with dependencies `[mode, editor]` checks the ref after mount and calls `replaceBlocks()` only when BlockNoteView is actually rendered. This defers the block replacement to the first render cycle after the mode switch.
+
+### Lesson Learned
+When conditionally rendering editor components (e.g., toggling between textarea and BlockNote), any programmatic content updates must be deferred until after the target component has mounted. Use a pending-content ref pattern and sync in a `useEffect` that runs after render.
