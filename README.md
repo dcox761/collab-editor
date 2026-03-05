@@ -5,7 +5,6 @@ A collaborative Markdown editor with a block-based WYSIWYG interface, file brows
 ## Quick Start — Docker
 
 ```bash
-cd collab-editor
 docker compose up --build
 ```
 
@@ -13,13 +12,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 The first run seeds a `docs` volume with sample Markdown files. Documents persist across container restarts.
 
-## Quick Start — Development (without Docker)
+## Quick Start — Development (Devcontainer)
 
-Requires Node.js 20+.
+This project uses a VS Code Devcontainer. The `.devcontainer/Dockerfile` installs Node.js 20 LTS, and the `postCreateCommand` in `devcontainer.json` automatically installs dependencies to `/tmp/collab-editor-deps` (Docker filesystem) for performance, then symlinks `node_modules` back to the workspace.
+
+Once the devcontainer is built, dependencies are ready:
 
 ```bash
-cd collab-editor
-npm install
 npm run dev
 ```
 
@@ -30,6 +29,26 @@ This starts two processes concurrently:
 Open [http://localhost:5173](http://localhost:5173) for hot-reloading development.
 
 By default, the server reads/writes Markdown files in `./docs`. Override with the `DOCS_PATH` environment variable.
+
+### Why /tmp for node_modules?
+
+The devcontainer workspace directory is bind-mounted from the host, which is very slow for the thousands of small files in `node_modules`. Dependencies are installed on the Docker filesystem (`/tmp/collab-editor-deps`) and symlinked into the workspace. If the container is rebuilt, the `postCreateCommand` re-runs automatically.
+
+To manually re-install after changing `package.json`:
+
+```bash
+cp package.json package-lock.json /tmp/collab-editor-deps/
+cd /tmp/collab-editor-deps && npm install
+```
+
+## Quick Start — Development (without Docker)
+
+Requires Node.js 20+.
+
+```bash
+npm install
+npm run dev
+```
 
 ## Build for Production
 
@@ -81,8 +100,10 @@ docker compose logs -f app
 ## Project Structure
 
 ```
-collab-editor/
-├── Dockerfile                  # Multi-stage Docker build
+├── .devcontainer/
+│   ├── Dockerfile              # Devcontainer: Ubuntu + Node.js 20 + Docker CLI
+│   └── devcontainer.json       # Devcontainer config with /tmp node_modules setup
+├── Dockerfile                  # Multi-stage Docker build (production)
 ├── docker-compose.yml          # Single-service compose
 ├── docker-entrypoint.sh        # Volume seeder
 ├── package.json                # Dependencies and scripts
@@ -91,6 +112,13 @@ collab-editor/
 ├── vite.config.ts              # Vite bundler + dev proxy
 ├── .env                        # Environment variables
 ├── docs/                       # Sample documents (mounted volume in Docker)
+│   ├── AI-COLLABORATION.md     # Full requirements and build log
+│   ├── welcome.md
+│   └── example/
+│       └── nested-doc.md
+├── plans/                      # Implementation plans
+│   ├── phase-1a-plan.md
+│   └── source-mode-plan.md
 └── src/
     ├── server/
     │   ├── index.ts            # Express entry point
@@ -149,7 +177,7 @@ All file paths are validated to prevent path traversal attacks.
 
 ## Roadmap
 
-See the full requirements and build phases in [`scratch/AI-COLLABORATION.md`](../scratch/AI-COLLABORATION.md).
+See the full requirements and build phases in [`docs/AI-COLLABORATION.md`](docs/AI-COLLABORATION.md).
 
 | Phase | Status | Description |
 |-------|--------|-------------|

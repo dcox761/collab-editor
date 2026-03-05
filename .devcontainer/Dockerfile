@@ -36,6 +36,10 @@ ENV VIRTUAL_ENV="/root/venv"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 RUN echo "source ~/venv/bin/activate" >> ~/.bashrc
 
+# Node.js 20 LTS for local development/testing
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
+
 RUN \
   apt clean
 

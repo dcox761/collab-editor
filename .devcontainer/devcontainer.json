@@ -1,7 +1,7 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-	"name": "Ubuntu",
+	"name": "Collab Editor",
 	"build": {
 		"dockerfile": "Dockerfile"
 	},
@@ -11,51 +11,19 @@
 	"portsAttributes": {
 		"3000": {
 			"label": "Collab Editor",
-			"onAutoForward": "ignore"
+			"onAutoForward": "notify"
+		},
+		"5173": {
+			"label": "Vite Dev Server",
+			"onAutoForward": "notify"
 		}
-	}
+	},
+
+	// Install node_modules in /tmp (Docker filesystem) for performance.
+	// The bind-mounted workspace directory is very slow for the thousands
+	// of small files in node_modules. A symlink bridges the two locations.
+	"postCreateCommand": "mkdir -p /tmp/collab-editor-deps && cp package.json package-lock.json /tmp/collab-editor-deps/ && cd /tmp/collab-editor-deps && npm install && ln -sf /tmp/collab-editor-deps/node_modules ${containerWorkspaceFolder}/node_modules"
+
 	// "remoteUser": "root",
-	// "containerUser": "root",	
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	// "image": "mcr.microsoft.com/devcontainers/base:jammy",
-	// "features": {
-	// 	"ghcr.io/devcontainers/features/aws-cli:1": {
-	// 		"version": "latest"
-	// 	},
-	// 	"ghcr.io/devcontainers/features/python:1": {
-	// 		"installTools": true,
-	// 		"version": "latest"
-	// 	},
-	// 	"ghcr.io/devcontainers/features/terraform:1": {
-	// 		"version": "latest",
-	// 		"tflint": "latest",
-	// 		"terragrunt": "latest"
-	// 	},
-	// 	"ghcr.io/devcontainers-contrib/features/terragrunt:1": {
-	// 		"version": "latest"
-	// 	}
-	// }
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "uname -a",
-
-	// Configure tool-specific properties.
-	// "customizations": {},
-	// "customizations": {
-	// 	"vscode": {
-	// 		"settings": {
-	// 			"dev.containers.mountWaylandSocket": false
-	// 		}
-	// 	}
-	// }
-
-
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+	// "containerUser": "root"
 }

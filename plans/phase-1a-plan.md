@@ -27,11 +27,15 @@ graph TD
 ## Project Structure
 
 ```
-collab-editor/
+├── .devcontainer/
+│   ├── Dockerfile              # Devcontainer: Ubuntu + Node.js 20 + Docker CLI
+│   └── devcontainer.json       # Devcontainer config with /tmp node_modules setup
 ├── docker-compose.yml
-├── Dockerfile
+├── Dockerfile                  # Multi-stage Docker build (production)
 ├── package.json
 ├── tsconfig.json
+├── tsconfig.server.json
+├── vite.config.ts
 ├── src/
 │   ├── server/
 │   │   ├── index.ts              # Express server entry point
@@ -90,9 +94,9 @@ collab-editor/
 - Expose port 3000
 
 **Files to create:**
-- `collab-editor/Dockerfile`
-- `collab-editor/docker-compose.yml`
-- `collab-editor/.env`
+- `Dockerfile`
+- `docker-compose.yml`
+- `.env`
 
 **Docker Compose structure:**
 ```yaml
@@ -137,16 +141,16 @@ PORT=3000
   - Future: upgrades to CodeMirror 6 + Yjs (see `plans/source-mode-plan.md`)
 
 **Files to create:**
-- `collab-editor/package.json` — dependencies: express, @blocknote/core, @blocknote/react, @blocknote/mantine, react, react-dom, vite
-- `collab-editor/tsconfig.json`
-- `collab-editor/src/server/index.ts`
-- `collab-editor/src/server/routes/files.ts`
-- `collab-editor/src/server/services/fileService.ts`
-- `collab-editor/src/client/index.html`
-- `collab-editor/src/client/main.tsx`
-- `collab-editor/src/client/App.tsx`
-- `collab-editor/src/client/components/Editor/MarkdownEditor.tsx`
-- `collab-editor/src/client/components/Editor/EditorPanel.tsx`
+- `package.json` — dependencies: express, @blocknote/core, @blocknote/react, @blocknote/mantine, react, react-dom, vite
+- `tsconfig.json`
+- `src/server/index.ts`
+- `src/server/routes/files.ts`
+- `src/server/services/fileService.ts`
+- `src/client/index.html`
+- `src/client/main.tsx`
+- `src/client/App.tsx`
+- `src/client/components/Editor/MarkdownEditor.tsx`
+- `src/client/components/Editor/EditorPanel.tsx`
 
 **REST API design:**
 
@@ -195,10 +199,10 @@ interface FileTreeNode {
 - `NewFileDialog` modal for entering name when creating files/folders
 
 **Files to create:**
-- `collab-editor/src/client/components/FileBrowser/FileBrowser.tsx`
-- `collab-editor/src/client/components/FileBrowser/FileTreeItem.tsx`
-- `collab-editor/src/client/components/FileBrowser/NewFileDialog.tsx`
-- `collab-editor/src/client/hooks/useFileTree.ts`
+- `src/client/components/FileBrowser/FileBrowser.tsx`
+- `src/client/components/FileBrowser/FileTreeItem.tsx`
+- `src/client/components/FileBrowser/NewFileDialog.tsx`
+- `src/client/hooks/useFileTree.ts`
 
 **Key implementation details:**
 - Tree state managed by `useFileTree` hook which calls `GET /api/tree` and provides refresh
@@ -229,9 +233,9 @@ interface FileTreeNode {
 - Opening an already-open file switches to its existing tab
 
 **Files to create:**
-- `collab-editor/src/client/components/Editor/TabBar.tsx`
-- `collab-editor/src/client/components/Editor/Tab.tsx`
-- `collab-editor/src/client/hooks/useOpenFiles.ts`
+- `src/client/components/Editor/TabBar.tsx`
+- `src/client/components/Editor/Tab.tsx`
+- `src/client/hooks/useOpenFiles.ts`
 
 **Key implementation details:**
 - `useOpenFiles` stores: `openFiles: Array of { path, name, content, isDirty }`, `activeFilePath: string`

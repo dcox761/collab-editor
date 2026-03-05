@@ -45,8 +45,8 @@ graph TD
 
 | File | Change |
 |---|---|
-| [`MarkdownEditor.tsx`](collab-editor/src/client/components/Editor/MarkdownEditor.tsx) | Add mode state, toggle button, textarea, and sync logic |
-| [`global.css`](collab-editor/src/client/styles/global.css) | Add styles for toggle button and source textarea |
+| [`MarkdownEditor.tsx`](src/client/components/Editor/MarkdownEditor.tsx) | Add mode state, toggle button, textarea, and sync logic |
+| [`global.css`](src/client/styles/global.css) | Add styles for toggle button and source textarea |
 
 No new files needed. No new dependencies.
 

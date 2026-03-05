@@ -325,29 +325,35 @@ Phase 1A delivered a single-user Markdown editor running in Docker with an Expre
 
 **Problem**: The devcontainer environment did not have Node.js installed. Running `npm install` failed with `npm: not found`.
 
-**Resolution**: Installed Node.js 20 LTS via the NodeSource apt repository:
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
+**Resolution**: Added Node.js 20 LTS installation to `.devcontainer/Dockerfile` via the NodeSource apt repository:
+```dockerfile
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
 ```
 
-**Lesson**: Don't assume runtime availability in devcontainers — verify before starting dependency installation.
+Node.js is now always available when the devcontainer is built.
+
+**Lesson**: Don't assume runtime availability in devcontainers — add required runtimes to the `.devcontainer/Dockerfile` so the environment is reproducible.
 
 #### 2. Slow Mapped Filesystem for node_modules
 
-**Problem**: The workspace directory (`/workspaces/Cloud-Management`) is on a mapped filesystem that is very slow for the thousands of small files in `node_modules`. Running `npm install` directly in the workspace would have been painfully slow and impacted builds.
+**Problem**: The devcontainer workspace directory is bind-mounted from the host, which is very slow for the thousands of small files in `node_modules`. Running `npm install` directly in the workspace would be painfully slow and impact builds.
 
-**Resolution**: Installed dependencies in `/tmp/collab-editor-deps` (a fast local filesystem) and created a symlink:
-```bash
-mkdir -p /tmp/collab-editor-deps
-cp collab-editor/package.json collab-editor/package-lock.json /tmp/collab-editor-deps/
-cd /tmp/collab-editor-deps && npm install
-ln -s /tmp/collab-editor-deps/node_modules collab-editor/node_modules
+**Resolution**: Configured `devcontainer.json` with a `postCreateCommand` that installs dependencies in `/tmp/collab-editor-deps` (Docker filesystem — fast) and creates a symlink into the workspace:
+```jsonc
+// .devcontainer/devcontainer.json
+"postCreateCommand": "mkdir -p /tmp/collab-editor-deps && cp package.json package-lock.json /tmp/collab-editor-deps/ && cd /tmp/collab-editor-deps && npm install && ln -sf /tmp/collab-editor-deps/node_modules ${containerWorkspaceFolder}/node_modules"
 ```
 
-**Trade-off**: The symlink is ephemeral — if the devcontainer is rebuilt, `npm install` must be re-run in `/tmp`. The `package.json` and `package-lock.json` remain in the workspace for Git tracking. This is acceptable for development.
+This runs automatically when the devcontainer is created. To manually re-install after changing `package.json`:
+```bash
+cp package.json package-lock.json /tmp/collab-editor-deps/
+cd /tmp/collab-editor-deps && npm install
+```
 
-**Lesson**: For mapped/remote filesystems, always consider relocating `node_modules` to a local tmpfs or similar fast storage.
+**Trade-off**: The symlink is ephemeral — if the devcontainer is rebuilt, the `postCreateCommand` re-runs automatically. The `package.json` and `package-lock.json` remain in the workspace for Git tracking.
+
+**Lesson**: For bind-mounted filesystems in devcontainers, always relocate `node_modules` to the Docker filesystem (`/tmp` or similar) and use the `postCreateCommand` to automate the setup.
 
 #### 3. VS Code Port Forwarding Conflict with Docker Port Mapping
 
@@ -398,36 +404,38 @@ The server build uses `tsc -p tsconfig.server.json` and the client build uses `v
 
 | File | Purpose |
 |------|---------|
-| `collab-editor/README.md` | Build, deploy, and development documentation |
-| `collab-editor/Dockerfile` | Multi-stage build: builder + production |
-| `collab-editor/docker-compose.yml` | Single app service, port 3000, named docs volume |
-| `collab-editor/.env` | `DOCS_PATH=/app/docs`, `PORT=3000` |
-| `collab-editor/docker-entrypoint.sh` | Seeds docs volume with sample files |
-| `collab-editor/package.json` | Dependencies and build scripts |
-| `collab-editor/tsconfig.json` | Client TypeScript config |
-| `collab-editor/tsconfig.server.json` | Server TypeScript config |
-| `collab-editor/vite.config.ts` | Vite bundler config with API proxy |
-| `collab-editor/src/server/index.ts` | Express server entry point |
-| `collab-editor/src/server/routes/files.ts` | REST API routes for file operations |
-| `collab-editor/src/server/services/fileService.ts` | Filesystem service with path traversal protection |
-| `collab-editor/src/client/index.html` | SPA entry point |
-| `collab-editor/src/client/main.tsx` | React entry with MantineProvider |
-| `collab-editor/src/client/App.tsx` | Root layout with three panels |
-| `collab-editor/src/client/styles/global.css` | All component styles |
-| `collab-editor/src/client/hooks/useFileTree.ts` | File tree data fetching hook |
-| `collab-editor/src/client/hooks/useOpenFiles.ts` | Open tabs state management hook |
-| `collab-editor/src/client/components/Editor/MarkdownEditor.tsx` | BlockNote editor wrapper |
-| `collab-editor/src/client/components/Editor/EditorPanel.tsx` | Tab bar + active editor panel |
-| `collab-editor/src/client/components/Editor/TabBar.tsx` | Tab bar component |
-| `collab-editor/src/client/components/Editor/Tab.tsx` | Single tab with dirty indicator |
-| `collab-editor/src/client/components/FileBrowser/FileBrowser.tsx` | File tree sidebar |
-| `collab-editor/src/client/components/FileBrowser/FileTreeItem.tsx` | Recursive tree node |
-| `collab-editor/src/client/components/FileBrowser/NewFileDialog.tsx` | New file/folder dialog |
-| `collab-editor/src/client/components/ChatPanel/ChatPanel.tsx` | Placeholder for Phase 1c |
-| `collab-editor/docs/welcome.md` | Sample welcome document |
-| `collab-editor/docs/example/nested-doc.md` | Sample nested document |
-| `collab-editor/.gitignore` | Ignores node_modules, dist, logs |
-| `collab-editor/.dockerignore` | Ignores node_modules, dist, .git |
+| `README.md` | Build, deploy, and development documentation |
+| `Dockerfile` | Multi-stage build: builder + production |
+| `docker-compose.yml` | Single app service, port 3000, named docs volume |
+| `.env` | `DOCS_PATH=/app/docs`, `PORT=3000` |
+| `docker-entrypoint.sh` | Seeds docs volume with sample files |
+| `package.json` | Dependencies and build scripts |
+| `tsconfig.json` | Client TypeScript config |
+| `tsconfig.server.json` | Server TypeScript config |
+| `vite.config.ts` | Vite bundler config with API proxy |
+| `.devcontainer/Dockerfile` | Devcontainer: Ubuntu + Node.js 20 + Docker CLI |
+| `.devcontainer/devcontainer.json` | Devcontainer config with /tmp node_modules setup |
+| `src/server/index.ts` | Express server entry point |
+| `src/server/routes/files.ts` | REST API routes for file operations |
+| `src/server/services/fileService.ts` | Filesystem service with path traversal protection |
+| `src/client/index.html` | SPA entry point |
+| `src/client/main.tsx` | React entry with MantineProvider |
+| `src/client/App.tsx` | Root layout with three panels |
+| `src/client/styles/global.css` | All component styles |
+| `src/client/hooks/useFileTree.ts` | File tree data fetching hook |
+| `src/client/hooks/useOpenFiles.ts` | Open tabs state management hook |
+| `src/client/components/Editor/MarkdownEditor.tsx` | BlockNote editor wrapper |
+| `src/client/components/Editor/EditorPanel.tsx` | Tab bar + active editor panel |
+| `src/client/components/Editor/TabBar.tsx` | Tab bar component |
+| `src/client/components/Editor/Tab.tsx` | Single tab with dirty indicator |
+| `src/client/components/FileBrowser/FileBrowser.tsx` | File tree sidebar |
+| `src/client/components/FileBrowser/FileTreeItem.tsx` | Recursive tree node |
+| `src/client/components/FileBrowser/NewFileDialog.tsx` | New file/folder dialog |
+| `src/client/components/ChatPanel/ChatPanel.tsx` | Placeholder for Phase 1c |
+| `docs/welcome.md` | Sample welcome document |
+| `docs/example/nested-doc.md` | Sample nested document |
+| `.gitignore` | Ignores node_modules, dist, logs |
+| `.dockerignore` | Ignores node_modules, dist, .git |
 
 ### Test Results (All Passing)
 
