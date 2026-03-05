@@ -42,25 +42,22 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
   // (component remounts via key={path} when switching files, so this runs per-file)
   useEffect(() => {
     let cancelled = false;
-    async function loadContent() {
-      try {
-        const blocks = await editor.tryParseMarkdownToBlocks(initialContentRef.current);
-        if (!cancelled) {
-          suppressOnChangeRef.current = true;
-          editor.replaceBlocks(editor.document, blocks);
-          // Allow a tick for BlockNote to fire (and discard) the spurious onChange
-          setTimeout(() => {
-            suppressOnChangeRef.current = false;
-          }, 0);
-          setSourceText(initialContentRef.current);
-          lastMarkdownRef.current = initialContentRef.current;
-          setInitialized(true);
-        }
-      } catch (err) {
-        console.error('Error parsing markdown:', err);
+    try {
+      const blocks = editor.tryParseMarkdownToBlocks(initialContentRef.current);
+      if (!cancelled) {
+        suppressOnChangeRef.current = true;
+        editor.replaceBlocks(editor.document, blocks);
+        // Allow a tick for BlockNote to fire (and discard) the spurious onChange
+        setTimeout(() => {
+          suppressOnChangeRef.current = false;
+        }, 0);
+        setSourceText(initialContentRef.current);
+        lastMarkdownRef.current = initialContentRef.current;
+        setInitialized(true);
       }
+    } catch (err) {
+      console.error('Error parsing markdown:', err);
     }
-    loadContent();
     return () => {
       cancelled = true;
     };
@@ -72,30 +69,28 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
     const markdown = pendingMarkdownRef.current;
     pendingMarkdownRef.current = null;
 
-    async function applyPending() {
-      try {
-        suppressOnChangeRef.current = true;
-        const blocks = await editor.tryParseMarkdownToBlocks(markdown);
-        editor.replaceBlocks(editor.document, blocks);
-        setTimeout(() => {
-          suppressOnChangeRef.current = false;
-        }, 0);
-      } catch (err) {
-        console.error('Error applying source changes to rich editor:', err);
+    try {
+      suppressOnChangeRef.current = true;
+      const blocks = editor.tryParseMarkdownToBlocks(markdown);
+      editor.replaceBlocks(editor.document, blocks);
+      setTimeout(() => {
         suppressOnChangeRef.current = false;
-      }
+      }, 0);
+    } catch (err) {
+      console.error('Error applying source changes to rich editor:', err);
+      suppressOnChangeRef.current = false;
     }
-    applyPending();
   }, [mode, editor]);
 
   // Rich mode onChange — serialize blocks to normalized markdown
-  const handleRichChange = useCallback(async () => {
+  // BlockNote 0.47+ passes (editor, context) to onChange
+  const handleRichChange = useCallback(() => {
     if (!initialized || suppressOnChangeRef.current) {
       return;
     }
     try {
       richEditedRef.current = true;
-      const raw = await editor.blocksToMarkdownLossy(editor.document);
+      const raw = editor.blocksToMarkdownLossy(editor.document);
       const markdown = normalizeMarkdown(raw);
       lastMarkdownRef.current = markdown;
       onChange(markdown);
@@ -141,13 +136,13 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
   );
 
   // Toggle between rich and source modes with content sync
-  const handleToggle = useCallback(async () => {
+  const handleToggle = useCallback(() => {
     if (mode === 'rich') {
       // Rich → Source: only re-serialize if user actually edited in rich mode.
       // This avoids lossy formatting changes when the user merely viewed the document.
       if (richEditedRef.current) {
         try {
-          const raw = await editor.blocksToMarkdownLossy(editor.document);
+          const raw = editor.blocksToMarkdownLossy(editor.document);
           const markdown = normalizeMarkdown(raw);
           lastMarkdownRef.current = markdown;
           setSourceText(markdown);

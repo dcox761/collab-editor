@@ -119,8 +119,8 @@ When `node_modules` is symlinked from an external path (common in Docker for per
 
 **Date**: 2026-03-05
 **Severity**: Low — cosmetic console warning only
-**Status**: Known issue (upstream) — deferred to package upgrade
-**Affected packages**: `@blocknote/mantine@0.24.2`, `@blocknote/react@0.24.2`
+**Status**: Fixed — resolved by upgrading to BlockNote 0.47.1 + Mantine 8.x
+**Affected packages**: `@blocknote/mantine`, `@blocknote/react`, `@mantine/core`
 
 ### Symptom
 Console warning on every editor mount:
@@ -134,30 +134,24 @@ Stack trace points entirely into minified BlockNote/Mantine internals (`mr2` →
 ### Root Cause
 An internal Mantine component used by BlockNote's toolbar/menu system is a function component that receives a ref without wrapping in `React.forwardRef()`. This is inside the library code — our `MarkdownEditor` component does not pass any ref to `BlockNoteView`.
 
-### Impact
-None. The warning is cosmetic. It does not affect functionality, cause runtime errors, or degrade performance. React DevTools hint ("Download the React DevTools for a better development experience") is also unrelated — it's a standard React development message.
+### Fix
+Upgraded all packages together:
 
-### Resolution Plan: Upgrade to BlockNote 0.47.x
+| Package | Before | After |
+|---------|--------|-------|
+| `@blocknote/core` | 0.24.2 | 0.47.1 |
+| `@blocknote/react` | 0.24.2 | 0.47.1 |
+| `@blocknote/mantine` | 0.24.2 | 0.47.1 |
+| `@mantine/core` | 7.17.4 | 8.3.x |
+| `@mantine/hooks` | — | 8.3.x (new peer dep) |
+| `@mantine/utils` | — | 6.0.x (new peer dep) |
 
-The latest BlockNote packages (0.47.1 as of 2026-03-05) may resolve this warning. However, the upgrade is non-trivial:
+API changes adapted in `MarkdownEditor.tsx`:
+- `tryParseMarkdownToBlocks()` — now **synchronous** (was async/Promise in 0.24)
+- `blocksToMarkdownLossy()` — now **synchronous** (was async/Promise in 0.24)
+- `onChange` callback — now receives `(editor, context)` instead of `() => void`
+- Removed all `async`/`await` from methods that called these APIs
+- `MantineProvider` in `main.tsx` — no changes needed (basic usage is backward-compatible)
 
-| Package | Current | Latest | Notes |
-|---------|---------|--------|-------|
-| `@blocknote/core` | 0.24.2 | 0.47.1 | 23 minor versions — likely API changes |
-| `@blocknote/react` | 0.24.2 | 0.47.1 | Same — hooks/components may differ |
-| `@blocknote/mantine` | 0.24.2 | 0.47.1 | Now requires `@mantine/core@^8.3.11` |
-| `@mantine/core` | 7.17.4 | 8.x | **Major version bump** — theme/component API changes |
-
-**Upgrade steps** (when prioritised):
-
-1. **Read BlockNote changelog** — Review breaking changes from 0.24 → 0.47 at https://github.com/TypeCellOS/BlockNote/releases
-2. **Upgrade `@mantine/core`** from v7 to v8 — update `MantineProvider` usage in `App.tsx`, check theme configuration
-3. **Upgrade all `@blocknote/*` packages** together (core, react, mantine must match versions)
-4. **Update `MarkdownEditor.tsx`** — adapt to any changed APIs:
-   - `useCreateBlockNote` hook signature
-   - `BlockNoteView` props
-   - `tryParseMarkdownToBlocks` / `blocksToMarkdownLossy` methods
-   - `replaceBlocks` / `editor.document` access
-5. **Test rich ↔ source mode toggle** — ensure markdown round-tripping still works
-6. **Verify the forwardRef warning is resolved** in the new version
-7. **Test save/load cycle** — confirm no regressions in file persistence
+### Lesson Learned
+When upgrading across many minor versions (0.24 → 0.47), check for sync/async API signature changes. TypeScript will catch return-type mismatches, but `await`ing a synchronous function silently works (it wraps the value in a resolved Promise), so extra `await`s won't cause build errors but add unnecessary overhead.

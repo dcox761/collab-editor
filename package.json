@@ -13,10 +13,12 @@
     "start": "node dist/server/index.js"
   },
   "dependencies": {
-    "@blocknote/core": "^0.24.2",
-    "@blocknote/mantine": "^0.24.2",
-    "@blocknote/react": "^0.24.2",
-    "@mantine/core": "^7.17.4",
+    "@blocknote/core": "^0.47.1",
+    "@blocknote/mantine": "^0.47.1",
+    "@blocknote/react": "^0.47.1",
+    "@mantine/core": "^8.3.11",
+    "@mantine/hooks": "^8.3.11",
+    "@mantine/utils": "^6.0.22",
     "express": "^4.21.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
