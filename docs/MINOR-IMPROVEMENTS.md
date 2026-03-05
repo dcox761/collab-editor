@@ -1,0 +1,6 @@
+- adjustable window width
+- prompt for username if not set, store in browser local storage
+- change username
+- keep scroll and cursor position switching source to review
+- OR open preview to side and sync position
+- undo/version history since auto-save could save mistakes by accident

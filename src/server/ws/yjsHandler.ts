@@ -78,6 +78,10 @@ export function setupYjsWebSocket(server: http.Server): void {
 
 /**
  * Handle a new WebSocket connection for a Y.js room.
+ *
+ * IMPORTANT: The message handler is registered synchronously via a buffer
+ * so that messages arriving during async disk I/O are not lost.  After
+ * setup completes the buffered messages are replayed through the real handler.
  */
 async function handleConnection(ws: WebSocket, url: string): Promise<void> {
   // Extract room name from URL: /yjs/welcome.md or /yjs/example%2Fnested-doc.md
@@ -89,6 +93,13 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
   }
 
   console.log(`[Y.js WS] New connection for room: ${roomName}`);
+
+  // --- Buffer messages that arrive during async setup ---
+  const messageBuffer: (Buffer | ArrayBuffer | Buffer[])[] = [];
+  const bufferListener = (data: Buffer | ArrayBuffer | Buffer[]) => {
+    messageBuffer.push(data);
+  };
+  ws.on('message', bufferListener);
 
   // Get or create the Y.Doc for this room
   const { doc, isNew } = getOrCreateDoc(roomName);
@@ -103,6 +114,8 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
       return;
     }
   }
+
+  // --- Async work done — set up handlers synchronously from here ---
 
   // Get or create awareness for this room
   const awareness = getOrCreateAwareness(roomName, doc);
@@ -144,37 +157,8 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
   };
   awareness.on('update', awarenessChangeHandler);
 
-  // Send initial sync step 1 to the new client
-  {
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, MSG_SYNC);
-    syncProtocol.writeSyncStep1(encoder, doc);
-    send(ws, encoding.toUint8Array(encoder));
-  }
-
-  // Send current awareness state to the new client
-  {
-    const states = awareness.getStates();
-    if (states.size > 0) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, MSG_AWARENESS);
-      encoding.writeVarUint8Array(
-        encoder,
-        awarenessProtocol.encodeAwarenessUpdate(
-          awareness,
-          Array.from(states.keys())
-        )
-      );
-      send(ws, encoding.toUint8Array(encoder));
-    }
-  }
-
-  // Store client info for cleanup
-  const clientInfo: ClientInfo = { roomName, awareness };
-  (ws as any).__yjsInfo = clientInfo;
-
-  // Handle incoming messages from this client
-  ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+  // The real message handler for this client
+  const handleMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
     try {
       const message = new Uint8Array(
         data instanceof ArrayBuffer ? data : (data as Buffer)
@@ -208,7 +192,48 @@ async function handleConnection(ws: WebSocket, url: string): Promise<void> {
     } catch (err) {
       console.error(`[Y.js WS] Error processing message in room ${roomName}:`, err);
     }
-  });
+  };
+
+  // Swap the buffer listener for the real handler
+  ws.off('message', bufferListener);
+  ws.on('message', handleMessage);
+
+  // Send initial sync step 1 to the new client
+  {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MSG_SYNC);
+    syncProtocol.writeSyncStep1(encoder, doc);
+    send(ws, encoding.toUint8Array(encoder));
+  }
+
+  // Send current awareness state to the new client
+  {
+    const states = awareness.getStates();
+    if (states.size > 0) {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MSG_AWARENESS);
+      encoding.writeVarUint8Array(
+        encoder,
+        awarenessProtocol.encodeAwarenessUpdate(
+          awareness,
+          Array.from(states.keys())
+        )
+      );
+      send(ws, encoding.toUint8Array(encoder));
+    }
+  }
+
+  // Replay any messages that arrived during async setup
+  if (messageBuffer.length > 0) {
+    console.log(`[Y.js WS] Replaying ${messageBuffer.length} buffered message(s) for room: ${roomName}`);
+    for (const data of messageBuffer) {
+      handleMessage(data);
+    }
+  }
+
+  // Store client info for cleanup
+  const clientInfo: ClientInfo = { roomName, awareness };
+  (ws as any).__yjsInfo = clientInfo;
 
   // Handle client disconnect
   ws.on('close', () => {

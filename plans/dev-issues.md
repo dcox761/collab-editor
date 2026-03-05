@@ -260,3 +260,42 @@ Introduced a `pendingMarkdownRef` that stores the markdown to load when switchin
 
 ### Lesson Learned
 When conditionally rendering editor components (e.g., toggling between textarea and BlockNote), any programmatic content updates must be deferred until after the target component has mounted. Use a pending-content ref pattern and sync in a `useEffect` that runs after render.
+
+---
+
+## DEV-ISSUE-009: Source editor empty on first file open (Y.js sync race)
+
+**Date**: 2026-03-05
+**Severity**: High — editor appears broken on first use
+**Status**: Fixed
+**Affected file**: `src/server/ws/yjsHandler.ts`
+
+### Symptom
+Opening any markdown file for the first time showed an empty source editor. The connection indicator showed "Connected" but no content appeared. Clicking a different file and then clicking back to the original file displayed the content correctly.
+
+### Root Cause
+Race condition in `handleConnection()`. The function was `async` and `await`ed `loadDocFromDisk()` (disk I/O) **before** registering `ws.on('message', ...)`. During the `await`, the y-websocket client immediately sent its sync step 1 message (containing its state vector) and an awareness update — 2 messages total. With no listener registered on the WebSocket, Node's EventEmitter silently discarded them.
+
+Without the client's sync step 1, the server never knew what the client was missing, so it never sent sync step 2 (the actual document content). The client remained empty.
+
+Re-opening the same file worked because the room was still cached in memory for 30 seconds (`isNew=false`), meaning no `await` occurred — the message handler was registered synchronously and no messages were dropped.
+
+### Diagnosis
+Added a temporary buffer listener before the `await` to count messages arriving during async setup:
+```
+[Y.js WS DEBUG] Room example/nested-doc.md: earlyMessages=2, yText.length=447, isNew=true   ← BROKEN
+[Y.js WS DEBUG] Room example/nested-doc.md: earlyMessages=0, yText.length=447, isNew=false  ← WORKS
+```
+Client-side logs confirmed `yText.length=0` even after `connected=true`, and no `synced` event ever fired.
+
+### Fix
+Restructured `handleConnection()` to buffer WebSocket messages during async setup and replay them after:
+
+1. **Immediate buffer listener** — `ws.on('message', bufferListener)` registered synchronously at connection time, capturing all messages into an array during async disk I/O
+2. **Handler swap** — After `await loadDocFromDisk()` completes, the buffer listener is replaced with the real `handleMessage` function via `ws.off('message', bufferListener); ws.on('message', handleMessage)`
+3. **Replay** — Any buffered messages are fed through `handleMessage()` in order, completing the sync protocol that would otherwise have been lost
+
+Server log now confirms: `Replaying 2 buffered message(s) for room: example/nested-doc.md`
+
+### Lesson Learned
+In async WebSocket handlers, **register the message listener synchronously before any `await`**. Node's EventEmitter drops events that have no listeners — they are not queued. When async initialisation is unavoidable, use a buffer-and-replay pattern: capture incoming messages in an array during the async window, then process them after setup completes.
