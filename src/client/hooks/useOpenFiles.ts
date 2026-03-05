@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 export interface OpenFile {
   path: string;
@@ -12,91 +12,64 @@ export function useOpenFiles() {
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
 
-  const openFile = useCallback(async (filePath: string) => {
-    // If file is already open, just switch to it
-    setOpenFiles((prev) => {
-      if (prev.some((f) => f.path === filePath)) {
-        return prev;
-      }
-      return prev;
-    });
+  // Mirror openFiles in a ref so we can read the latest value synchronously
+  // without relying on the setOpenFiles-as-getter anti-pattern.
+  const openFilesRef = useRef<OpenFile[]>(openFiles);
+  useEffect(() => {
+    openFilesRef.current = openFiles;
+  }, [openFiles]);
 
-    // Check if already open
+  const openFile = useCallback(async (filePath: string) => {
+    // Set active tab immediately
     setActiveFilePath(filePath);
 
-    setOpenFiles((prev) => {
-      if (prev.some((f) => f.path === filePath)) {
-        return prev;
-      }
-      // Will load content asynchronously
-      return prev;
-    });
+    // Check if this file is already open (synchronous ref read)
+    if (openFilesRef.current.some((f) => f.path === filePath)) {
+      return;
+    }
 
-    // Load content if not already open
-    setOpenFiles((prev) => {
-      if (prev.some((f) => f.path === filePath)) {
-        return prev;
-      }
-      return prev; // placeholder — actual load is below
-    });
+    try {
+      const res = await fetch(`/api/files/${filePath}`);
+      if (!res.ok) throw new Error('Failed to load file');
+      const { content } = await res.json();
+      const name = filePath.split('/').pop() || filePath;
 
-    // Check if this file is already open before fetching
-    let alreadyOpen = false;
-    setOpenFiles((prev) => {
-      alreadyOpen = prev.some((f) => f.path === filePath);
-      return prev;
-    });
-
-    if (!alreadyOpen) {
-      try {
-        const res = await fetch(`/api/files/${filePath}`);
-        if (!res.ok) throw new Error('Failed to load file');
-        const { content } = await res.json();
-        const name = filePath.split('/').pop() || filePath;
-
-        setOpenFiles((prev) => {
-          // Double-check it wasn't added while we were fetching
-          if (prev.some((f) => f.path === filePath)) return prev;
-          return [
-            ...prev,
-            {
-              path: filePath,
-              name,
-              content,
-              savedContent: content,
-              isDirty: false,
-            },
-          ];
-        });
-      } catch (err) {
-        console.error('Error loading file:', err);
-      }
+      setOpenFiles((prev) => {
+        // Double-check it wasn't added while we were fetching
+        if (prev.some((f) => f.path === filePath)) return prev;
+        return [
+          ...prev,
+          {
+            path: filePath,
+            name,
+            content,
+            savedContent: content,
+            isDirty: false,
+          },
+        ];
+      });
+    } catch (err) {
+      console.error('Error loading file:', err);
     }
   }, []);
 
   const closeFile = useCallback(
     (filePath: string) => {
-      setOpenFiles((prev) => {
-        const file = prev.find((f) => f.path === filePath);
-        if (file?.isDirty) {
-          const confirmed = window.confirm(
-            `"${file.name}" has unsaved changes. Discard them?`
-          );
-          if (!confirmed) return prev;
-        }
-        return prev.filter((f) => f.path !== filePath);
-      });
+      const file = openFilesRef.current.find((f) => f.path === filePath);
+      if (file?.isDirty) {
+        const confirmed = window.confirm(
+          `"${file.name}" has unsaved changes. Discard them?`
+        );
+        if (!confirmed) return;
+      }
+
+      setOpenFiles((prev) => prev.filter((f) => f.path !== filePath));
 
       setActiveFilePath((prev) => {
         if (prev === filePath) {
-          // Switch to another tab or null
-          let remaining: OpenFile[] = [];
-          setOpenFiles((prev) => {
-            remaining = prev;
-            return prev;
-          });
-          // remaining still has the old list at this point, so we use openFiles from closure
-          return null;
+          // Pick another tab from the ref (which still has the old list before filter)
+          const remaining = openFilesRef.current.filter((f) => f.path !== filePath);
+          return remaining.length > 0 ? remaining[0].path : null;
         }
         return prev;
       });
@@ -109,6 +82,9 @@ export function useOpenFiles() {
   }, []);
 
   const updateContent = useCallback((filePath: string, newContent: string) => {
+    if (newContent.trim() === '') {
+      console.warn('[DEBUG-SAVE] updateContent called with EMPTY content for:', filePath, new Error().stack);
+    }
     setOpenFiles((prev) =>
       prev.map((f) =>
         f.path === filePath
@@ -119,12 +95,25 @@ export function useOpenFiles() {
   }, []);
 
   const markSaved = useCallback(async (filePath: string) => {
-    let content = '';
-    setOpenFiles((prev) => {
-      const file = prev.find((f) => f.path === filePath);
-      if (file) content = file.content;
-      return prev;
+    // Read content synchronously from the ref — no setState-as-getter
+    const file = openFilesRef.current.find((f) => f.path === filePath);
+    const content = file?.content ?? '';
+    const fileFound = !!file;
+
+    console.log('[DEBUG-SAVE] markSaved called for:', filePath, {
+      fileFound,
+      contentLength: content.length,
+      contentEmpty: content.trim() === '',
+      contentPreview: content.substring(0, 100),
     });
+
+    if (!fileFound) {
+      console.error('[DEBUG-SAVE] markSaved: file NOT found in openFiles for path:', filePath);
+      return; // Don't save if file not found — avoids writing empty content
+    }
+    if (content.trim() === '') {
+      console.error('[DEBUG-SAVE] markSaved: about to save EMPTY content for:', filePath);
+    }
 
     try {
       const res = await fetch(`/api/files/${filePath}`, {

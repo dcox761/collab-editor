@@ -47,9 +47,18 @@ filesRouter.put('/files/*', async (req: Request, res: Response) => {
     const docsPath = req.app.locals.docsPath as string;
     const filePath = (req.params as Record<string, string>)[0];
     const { content } = req.body;
+    console.log(`[DEBUG-SAVE] PUT /api/files/${filePath}`, {
+      contentType: typeof content,
+      contentLength: typeof content === 'string' ? content.length : 'N/A',
+      contentEmpty: typeof content === 'string' ? content.trim() === '' : 'N/A',
+      contentPreview: typeof content === 'string' ? content.substring(0, 100) : 'N/A',
+    });
     if (typeof content !== 'string') {
       res.status(400).json({ error: 'content must be a string' });
       return;
+    }
+    if (content.trim() === '') {
+      console.warn(`[DEBUG-SAVE] WARNING: Writing EMPTY content to file: ${filePath}`);
     }
     await writeFileContent(docsPath, filePath, content);
     res.json({ success: true });

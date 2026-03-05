@@ -28,11 +28,14 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
     let cancelled = false;
     async function loadContent() {
       try {
+        console.log('[DEBUG-SAVE] loadContent starting, initialContent length:', initialContentRef.current.length);
         const blocks = await editor.tryParseMarkdownToBlocks(initialContentRef.current);
         if (!cancelled) {
+          console.log('[DEBUG-SAVE] loadContent replacing blocks, parsed block count:', blocks.length);
           editor.replaceBlocks(editor.document, blocks);
           setSourceText(initialContentRef.current);
           setInitialized(true);
+          console.log('[DEBUG-SAVE] loadContent complete, initialized=true');
         }
       } catch (err) {
         console.error('Error parsing markdown:', err);
@@ -63,9 +66,20 @@ export default function MarkdownEditor({ content, onChange }: MarkdownEditorProp
 
   // Rich mode onChange — serialize blocks to markdown
   const handleRichChange = useCallback(async () => {
-    if (!initialized) return;
+    if (!initialized) {
+      console.warn('[DEBUG-SAVE] handleRichChange skipped — not yet initialized');
+      return;
+    }
     try {
       const markdown = await editor.blocksToMarkdownLossy(editor.document);
+      if (markdown.trim() === '') {
+        console.warn('[DEBUG-SAVE] handleRichChange produced EMPTY markdown!', {
+          blockCount: editor.document.length,
+          firstBlock: JSON.stringify(editor.document[0]),
+        });
+      } else {
+        console.log('[DEBUG-SAVE] handleRichChange produced markdown, length:', markdown.length);
+      }
       onChange(markdown);
     } catch (err) {
       console.error('Error converting to markdown:', err);
