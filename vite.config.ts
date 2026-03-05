@@ -13,5 +13,10 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:3000',
     },
+    fs: {
+      // node_modules is symlinked from /tmp for Docker performance.
+      // Allow Vite to serve font files (and other assets) from there.
+      allow: ['/workspaces/collab-editor', '/tmp/collab-editor-deps'],
+    },
   },
 });
