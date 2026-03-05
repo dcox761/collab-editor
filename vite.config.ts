@@ -12,6 +12,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://localhost:3000',
+      '/yjs': {
+        target: 'ws://localhost:3000',
+        ws: true,
+      },
     },
     fs: {
       // node_modules is symlinked from /tmp for Docker performance.

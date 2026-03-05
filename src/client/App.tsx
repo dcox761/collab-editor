@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import FileBrowser from './components/FileBrowser/FileBrowser';
 import EditorPanel from './components/Editor/EditorPanel';
 import ChatPanel from './components/ChatPanel/ChatPanel';
@@ -13,8 +13,6 @@ export default function App() {
     openFile,
     closeFile,
     setActiveFile,
-    updateContent,
-    markSaved,
   } = useOpenFiles();
 
   const handleFileSelect = useCallback(
@@ -40,8 +38,6 @@ export default function App() {
           activeFilePath={activeFilePath}
           onTabSelect={setActiveFile}
           onTabClose={closeFile}
-          onContentChange={updateContent}
-          onSave={markSaved}
         />
       </main>
       <aside className="panel panel-right">

@@ -1,15 +1,19 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import TabBar from './TabBar';
-import MarkdownEditor from './MarkdownEditor';
+import SourceEditor from './SourceEditor';
+import PreviewPanel from './PreviewPanel';
+import PresenceBar from './PresenceBar';
+import { useYjsProvider } from '../../hooks/useYjsProvider';
+import { useUserIdentity } from '../../hooks/useUserIdentity';
 import type { OpenFile } from '../../hooks/useOpenFiles';
+
+type ViewMode = 'source' | 'preview';
 
 interface EditorPanelProps {
   openFiles: OpenFile[];
   activeFilePath: string | null;
   onTabSelect: (path: string) => void;
   onTabClose: (path: string) => void;
-  onContentChange: (path: string, content: string) => void;
-  onSave: (path: string) => void;
 }
 
 export default function EditorPanel({
@@ -17,33 +21,37 @@ export default function EditorPanel({
   activeFilePath,
   onTabSelect,
   onTabClose,
-  onContentChange,
-  onSave,
 }: EditorPanelProps) {
-  const activeFile = openFiles.find((f) => f.path === activeFilePath);
+  const [viewMode, setViewMode] = useState<ViewMode>('source');
 
-  // Ctrl+S / Cmd+S handler
+  // Y.js provider manages the collaborative document for the active file
+  const yjsState = useYjsProvider(activeFilePath);
+
+  // Publish user identity to awareness for cursor/presence sharing
+  useUserIdentity(yjsState?.awareness ?? null);
+
+  // Ctrl+S / Cmd+S → force-save via the Y.js persistence endpoint
+  const handleSave = useCallback(async () => {
+    if (!activeFilePath) return;
+    try {
+      const res = await fetch(`/api/save/${activeFilePath}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Force-save failed');
+      console.log(`[Save] Force-saved: ${activeFilePath}`);
+    } catch (err) {
+      console.error('[Save] Error:', err);
+    }
+  }, [activeFilePath]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        if (activeFilePath) {
-          onSave(activeFilePath);
-        }
+        handleSave();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeFilePath, onSave]);
-
-  const handleContentChange = useCallback(
-    (markdown: string) => {
-      if (activeFilePath) {
-        onContentChange(activeFilePath, markdown);
-      }
-    },
-    [activeFilePath, onContentChange]
-  );
+  }, [handleSave]);
 
   if (openFiles.length === 0) {
     return (
@@ -63,12 +71,43 @@ export default function EditorPanel({
         onTabSelect={onTabSelect}
         onTabClose={onTabClose}
       />
+      {activeFilePath && (
+        <div className="editor-toolbar">
+          <button
+            className={`toolbar-btn ${viewMode === 'source' ? 'toolbar-btn-active' : ''}`}
+            onClick={() => setViewMode('source')}
+          >
+            Source
+          </button>
+          <button
+            className={`toolbar-btn ${viewMode === 'preview' ? 'toolbar-btn-active' : ''}`}
+            onClick={() => setViewMode('preview')}
+          >
+            Preview
+          </button>
+          {yjsState && (
+            <>
+              <PresenceBar awareness={yjsState.awareness} />
+              <span className={`connection-status ${yjsState.connected ? 'connected' : 'disconnected'}`}>
+                {yjsState.connected ? '● Connected' : '○ Disconnected'}
+              </span>
+            </>
+          )}
+        </div>
+      )}
       <div className="editor-content">
-        {activeFile && (
-          <MarkdownEditor
-            key={activeFile.path}
-            content={activeFile.content}
-            onChange={handleContentChange}
+        {activeFilePath && yjsState && viewMode === 'source' && (
+          <SourceEditor
+            key={activeFilePath}
+            yText={yjsState.yText}
+            awareness={yjsState.awareness}
+            connected={yjsState.connected}
+          />
+        )}
+        {activeFilePath && yjsState && viewMode === 'preview' && (
+          <PreviewPanel
+            key={`preview-${activeFilePath}`}
+            yText={yjsState.yText}
           />
         )}
       </div>

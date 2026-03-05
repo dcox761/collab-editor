@@ -14,7 +14,6 @@ export default function Tab({ file, isActive, onSelect, onClose }: TabProps) {
       onClick={onSelect}
     >
       <span className="tab-name">
-        {file.isDirty && <span className="tab-dirty">●</span>}
         {file.name}
       </span>
       <button

@@ -1,7 +1,12 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { filesRouter } from './routes/files.js';
+import { setupYjsWebSocket } from './ws/yjsHandler.js';
+import { initPersistence, stopPersistence, saveAllDirty } from './services/yjsPersistence.js';
+import { destroyAllRooms } from './services/yjsService.js';
+import { saveDocToDisk } from './services/yjsPersistence.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,7 +31,30 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(clientPath, 'index.html'));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+// Create HTTP server (instead of app.listen) so we can attach WebSocket
+const server = http.createServer(app);
+
+// Attach Y.js WebSocket server for real-time collaboration
+setupYjsWebSocket(server);
+
+// Start periodic persistence (save Y.Docs to disk every 5s)
+initPersistence(app.locals.docsPath);
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
   console.log(`Serving docs from: ${app.locals.docsPath}`);
+  console.log(`Y.js WebSocket available at ws://0.0.0.0:${PORT}/yjs/:roomName`);
 });
+
+// Graceful shutdown: save all dirty docs and destroy rooms
+async function shutdown(signal: string) {
+  console.log(`\n[Shutdown] Received ${signal}, saving all documents...`);
+  stopPersistence();
+  await saveAllDirty();
+  await destroyAllRooms(saveDocToDisk);
+  console.log('[Shutdown] Cleanup complete, exiting.');
+  process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
