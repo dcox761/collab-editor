@@ -380,3 +380,56 @@ Three coordinated changes:
 
 ### Lesson Learned
 In-memory document caches with grace periods must be **revalidated against the filesystem** when reactivated. A "last client disconnected → grace period → new client connects" cycle is equivalent to a fresh open from the user's perspective — the file may have changed externally. Additionally, cleanup routines should only write to disk if there are actual unsaved changes; unconditional saves can destroy external modifications made during the idle window.
+
+---
+
+## DEV-ISSUE-012: CRLF line endings cause text corruption in collaborative editor
+
+**Date**: 2026-03-05
+**Severity**: Critical — every edit visibly corrupts document content
+**Status**: Fixed
+**Affected files**: `src/server/services/fileService.ts`, `src/client/components/Editor/SourceEditor.tsx`
+
+### Symptom
+Opening a file in the source editor and inserting a new line (e.g. typing "An extra line in the middle" after "Keep your sidebar manageable") produced garbled output in the preview panel and other editor instances. Instead of appearing on a new line, the inserted text was spliced into the middle of the preceding line: `Keep your sidebar mAn extra line in the middleanageable`. The corruption worsened with every subsequent edit and was 100% reproducible on files with CRLF (`\r\n`) line endings.
+
+### Root Cause
+A **character-position mismatch** between Y.Text and CodeMirror caused by CRLF line endings.
+
+1. **Y.Text stored `\r\n` verbatim.** When `loadDocFromDisk()` read a file with CRLF line endings into Y.Text via `yText.insert(0, content)`, the `\r\n` sequences (2 characters each) were preserved in the CRDT.
+
+2. **CodeMirror normalised to `\n`.** CodeMirror 6 unconditionally converts all line separators to `\n` (1 character each) when constructing its internal document model. So `doc.length` was smaller than `yText.length` by exactly the number of line breaks.
+
+3. **y-codemirror.next used CodeMirror positions against Y.Text.** The `ySync` plugin in y-codemirror.next translates CodeMirror transaction changes into Y.Text operations using CM's character offsets (e.g. `ytext.insert(fromA + adj, insertText)`). Because CM positions were systematically lower than the corresponding Y.Text positions (off by the accumulated `\r` count before the cursor), every insert/delete operation landed at the wrong location in the CRDT — producing the observed text-splicing corruption.
+
+Diagnostic evidence: on a file with 22 line breaks, `yText.toJSON().length` was 469 while `doc.length` was 447 (difference = 22 = number of `\r` characters).
+
+### Diagnosis
+1. Initial hypothesis (CodeMirror `history()` conflicting with yCollab's undo manager) led to a useful cleanup but did not fix the bug.
+2. Added diagnostic logging: Y.Text observer printing deltas + insert positions, and a CM `updateListener` comparing `doc.length` vs `yText.length` on every transaction.
+3. On first load, the observer showed `\r\n` in the Y.Text delta insert, and the length mismatch (469 vs 447) immediately identified CRLF as the root cause.
+4. Confirmed the difference (22) exactly matched the number of line breaks in the file.
+
+### Fix
+Two changes:
+
+1. **`fileService.ts` — Normalise line endings at the read boundary.**
+   `readFileContent()` now strips `\r` from all line endings before returning content. This is the single point where disk content enters the Y.js system, so the fix covers all paths (initial load, grace-period reload, etc.):
+   ```typescript
+   export async function readFileContent(docsRoot: string, relativePath: string): Promise<string> {
+     const fullPath = safePath(docsRoot, relativePath);
+     const raw = await fs.readFile(fullPath, 'utf-8');
+     return raw.replace(/\r\n?/g, '\n');
+   }
+   ```
+
+2. **`SourceEditor.tsx` — Replace CodeMirror `history()` with yCollab undo manager.**
+   Removed the built-in `history()` extension and `historyKeymap` which conflicted with y-codemirror.next's own undo manager (both intercepted Ctrl+Z/Y, causing position confusion). Replaced with `yUndoManagerKeymap` from y-codemirror.next. This was a secondary fix — not the root cause, but eliminated a potential source of further position-tracking issues:
+   ```typescript
+   import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+   // Removed: history() from extensions, historyKeymap from keymap
+   // Added: ...yUndoManagerKeymap in keymap
+   ```
+
+### Lesson Learned
+When bridging two text systems (Y.Text CRDT ↔ CodeMirror), **line-ending normalisation is mandatory at the ingestion boundary**. CodeMirror unconditionally normalises to `\n`, so any content entering Y.Text must match. A mismatch of even 1 character per line creates an accumulating offset that corrupts every subsequent position-based operation. The fix belongs at the lowest common entry point (file read), not scattered across consumers. Additionally, `\r\n` files will always exist in the wild (Windows, Git `autocrlf`), so this normalisation is not optional.

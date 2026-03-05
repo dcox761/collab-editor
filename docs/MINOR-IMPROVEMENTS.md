@@ -5,6 +5,7 @@
 - keep scroll and cursor position switching source to review
 - OR open preview to side and sync position
 - undo/version history since auto-save could save mistakes by accident
+- test undo functionality
 
 Other IDE/LLM:
 - Kiro very good at creating AND executing tests even with browser

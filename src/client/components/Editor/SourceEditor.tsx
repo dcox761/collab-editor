@@ -12,7 +12,7 @@ import {
   crosshairCursor,
   highlightActiveLine,
 } from '@codemirror/view';
-import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import {
   foldGutter,
   indentOnInput,
@@ -26,19 +26,20 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { lintKeymap } from '@codemirror/lint';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { yCollab } from 'y-codemirror.next';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 
 /**
  * Equivalent to codemirror's basicSetup, assembled from individual packages.
- * This avoids needing the `codemirror` meta-package.
+ * Excludes history() because yCollab provides its own Y.js-aware undo manager.
+ * Using CM's built-in history alongside yCollab causes position de-sync
+ * between the CodeMirror document and Y.Text, corrupting collaborative edits.
  */
 const basicSetup = [
   lineNumbers(),
   highlightActiveLineGutter(),
   highlightSpecialChars(),
-  history(),
   foldGutter(),
   drawSelection(),
   dropCursor(),
@@ -56,7 +57,7 @@ const basicSetup = [
     ...closeBracketsKeymap,
     ...defaultKeymap,
     ...searchKeymap,
-    ...historyKeymap,
+    ...yUndoManagerKeymap,
     ...foldKeymap,
     ...completionKeymap,
     ...lintKeymap,
