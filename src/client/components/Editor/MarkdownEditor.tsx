@@ -8,11 +8,21 @@ type EditorMode = 'rich' | 'source';
 
 /**
  * Normalize BlockNote's lossy markdown output to use common conventions:
- * - Convert "*   text" list items to "- text" (BlockNote emits star+3-space)
+ * - Convert "* text" / "*   text" list items to "- text" (BlockNote emits star markers)
+ * - Remove extra blank lines between consecutive list items (0.47 adds paragraph spacing)
+ * - Strip "text" language from bare code fences (```text → ```)
  * - Preserves nested list indentation
  */
 function normalizeMarkdown(md: string): string {
-  return md.replace(/^(\s*)\*   /gm, '$1- ');
+  let result = md;
+  // Convert star-based unordered list markers to dashes (handle both "* " and "*   ")
+  result = result.replace(/^(\s*)\*(\s{1,3})/gm, '$1- ');
+  // Remove blank lines between consecutive list items
+  // (matches a list line, followed by a blank line, followed by another list line)
+  result = result.replace(/^(\s*- .+)\n\n(?=\s*- )/gm, '$1\n');
+  // Strip "text" language hint from code fences (```text → ```)
+  result = result.replace(/^```text$/gm, '```');
+  return result;
 }
 
 interface MarkdownEditorProps {

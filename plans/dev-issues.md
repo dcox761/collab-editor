@@ -65,7 +65,7 @@ Two interacting problems in `MarkdownEditor.tsx`:
 ### Fix
 Three changes to `MarkdownEditor.tsx`:
 
-1. **`normalizeMarkdown()` post-processor** — A function that runs `blocksToMarkdownLossy()` output through a regex to convert `*   ` list items back to `- ` (the common convention). Applied everywhere serialization occurs.
+1. **`normalizeMarkdown()` post-processor** — A function that runs `blocksToMarkdownLossy()` output through regexes to normalize it. Updated in DEV-ISSUE-005 for BlockNote 0.47 changes. Applied everywhere serialization occurs.
 
 2. **`suppressOnChangeRef`** — A ref that blocks `handleRichChange` from firing during programmatic `replaceBlocks()` calls (initial load and source→rich sync). Uses `setTimeout(() => { suppressOnChangeRef.current = false }, 0)` to re-enable after BlockNote's microtask fires.
 
@@ -155,3 +155,45 @@ API changes adapted in `MarkdownEditor.tsx`:
 
 ### Lesson Learned
 When upgrading across many minor versions (0.24 → 0.47), check for sync/async API signature changes. TypeScript will catch return-type mismatches, but `await`ing a synchronous function silently works (it wraps the value in a resolved Promise), so extra `await`s won't cause build errors but add unnecessary overhead.
+
+---
+
+## DEV-ISSUE-005: Lossy markdown regression after BlockNote 0.47 upgrade
+
+**Date**: 2026-03-05
+**Severity**: Medium — unwanted file modifications on save
+**Status**: Fixed
+**Affected file**: `src/client/components/Editor/MarkdownEditor.tsx`
+
+### Symptom
+After upgrading BlockNote from 0.24 to 0.47 (DEV-ISSUE-004), the `normalizeMarkdown()` function no longer corrected all lossy output. Saving after a Rich→Source→Rich round-trip produced these diffs:
+
+- `- text` → `* text` (star + single space, not the old star + 3 spaces)
+- Extra blank lines inserted between consecutive list items
+- Bare ` ``` ` code fences gained a `text` language hint: ` ```text `
+
+### Root Cause
+BlockNote 0.47's `blocksToMarkdownLossy()` changed its output format compared to 0.24:
+
+1. **List markers**: 0.24 emitted `*   ` (star + 3 spaces); 0.47 emits `* ` (star + 1 space). The old regex `/^(\s*)\*   /gm` no longer matched.
+2. **List item spacing**: 0.47 treats list items as block paragraphs, adding blank lines between them. The original normalizer had no rule for this.
+3. **Code fence language**: 0.47 adds `text` as a default language specifier on bare code fences. The original normalizer didn't strip it.
+
+### Fix
+Updated `normalizeMarkdown()` with three rules:
+
+```ts
+function normalizeMarkdown(md: string): string {
+  let result = md;
+  // Convert star-based unordered list markers to dashes (handle both "* " and "*   ")
+  result = result.replace(/^(\s*)\*(\s{1,3})/gm, '$1- ');
+  // Remove blank lines between consecutive list items
+  result = result.replace(/^(\s*- .+)\n\n(?=\s*- )/gm, '$1\n');
+  // Strip "text" language hint from code fences (```text → ```)
+  result = result.replace(/^```text$/gm, '```');
+  return result;
+}
+```
+
+### Lesson Learned
+When upgrading rich-text editor libraries, the lossy serializer output format may change subtly between versions. Any post-processing normalizer must be re-validated against the new output. Integration-test the round-trip (original markdown → parse → serialize → normalize → compare) after every editor library upgrade.
