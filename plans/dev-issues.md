@@ -76,3 +76,88 @@ BlockNote's `blocksToMarkdownLossy()` is intentionally lossy — it normalizes f
 - **Post-process** the output to enforce your preferred conventions (e.g. dash list markers)
 - **Avoid unnecessary serialization** — track whether the user actually edited, and skip re-serialization when they didn't
 - **Suppress onChange during programmatic mutations** — `replaceBlocks()` triggers onChange just like user edits; gate the handler with a ref
+
+---
+
+## DEV-ISSUE-003: Font files blocked by Vite (403 Forbidden)
+
+**Date**: 2026-03-05
+**Severity**: Low — cosmetic (fonts fall back to system defaults)
+**Status**: Fixed
+**Affected file**: `vite.config.ts`
+
+### Symptom
+Browser console showed four `net::ERR_ABORTED 403 (Forbidden)` errors when loading the editor:
+```
+GET /@fs/tmp/collab-editor-deps/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-regular.woff2  403
+GET /@fs/tmp/collab-editor-deps/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-regular.woff   403
+GET /@fs/tmp/collab-editor-deps/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-700.woff2      403
+GET /@fs/tmp/collab-editor-deps/node_modules/@blocknote/core/src/fonts/inter-v12-latin/inter-v12-latin-700.woff       403
+```
+The Vite dev server logged: `The request url "/tmp/collab-editor-deps/..." is outside of Vite serving allow list.`
+
+### Root Cause
+The devcontainer setup (`postCreateCommand` in `.devcontainer/devcontainer.json`) installs `node_modules` at `/tmp/collab-editor-deps/node_modules` for Docker bind-mount performance and symlinks it into the workspace. Vite's filesystem security (`server.fs.strict`, enabled by default) only allows serving files from the project root and its `node_modules`. Since the real files live under `/tmp/`, Vite follows the symlink, resolves the real path, and blocks access.
+
+### Fix
+Added `server.fs.allow` to `vite.config.ts` to explicitly whitelist both the workspace and the symlink target:
+
+```ts
+server: {
+  fs: {
+    allow: ['/workspaces/collab-editor', '/tmp/collab-editor-deps'],
+  },
+},
+```
+
+### Lesson Learned
+When `node_modules` is symlinked from an external path (common in Docker for performance), Vite's filesystem security will block access to those files. Always add the real path to `server.fs.allow`.
+
+---
+
+## DEV-ISSUE-004: React forwardRef warning from BlockNote/Mantine
+
+**Date**: 2026-03-05
+**Severity**: Low — cosmetic console warning only
+**Status**: Known issue (upstream) — deferred to package upgrade
+**Affected packages**: `@blocknote/mantine@0.24.2`, `@blocknote/react@0.24.2`
+
+### Symptom
+Console warning on every editor mount:
+```
+Warning: Function components cannot be given refs. Attempts to access this ref will fail.
+Did you mean to use React.forwardRef()?
+Check the render method of `ur2`.
+```
+Stack trace points entirely into minified BlockNote/Mantine internals (`mr2` → `ur2` → `dr2` inside `@blocknote/react`).
+
+### Root Cause
+An internal Mantine component used by BlockNote's toolbar/menu system is a function component that receives a ref without wrapping in `React.forwardRef()`. This is inside the library code — our `MarkdownEditor` component does not pass any ref to `BlockNoteView`.
+
+### Impact
+None. The warning is cosmetic. It does not affect functionality, cause runtime errors, or degrade performance. React DevTools hint ("Download the React DevTools for a better development experience") is also unrelated — it's a standard React development message.
+
+### Resolution Plan: Upgrade to BlockNote 0.47.x
+
+The latest BlockNote packages (0.47.1 as of 2026-03-05) may resolve this warning. However, the upgrade is non-trivial:
+
+| Package | Current | Latest | Notes |
+|---------|---------|--------|-------|
+| `@blocknote/core` | 0.24.2 | 0.47.1 | 23 minor versions — likely API changes |
+| `@blocknote/react` | 0.24.2 | 0.47.1 | Same — hooks/components may differ |
+| `@blocknote/mantine` | 0.24.2 | 0.47.1 | Now requires `@mantine/core@^8.3.11` |
+| `@mantine/core` | 7.17.4 | 8.x | **Major version bump** — theme/component API changes |
+
+**Upgrade steps** (when prioritised):
+
+1. **Read BlockNote changelog** — Review breaking changes from 0.24 → 0.47 at https://github.com/TypeCellOS/BlockNote/releases
+2. **Upgrade `@mantine/core`** from v7 to v8 — update `MantineProvider` usage in `App.tsx`, check theme configuration
+3. **Upgrade all `@blocknote/*` packages** together (core, react, mantine must match versions)
+4. **Update `MarkdownEditor.tsx`** — adapt to any changed APIs:
+   - `useCreateBlockNote` hook signature
+   - `BlockNoteView` props
+   - `tryParseMarkdownToBlocks` / `blocksToMarkdownLossy` methods
+   - `replaceBlocks` / `editor.document` access
+5. **Test rich ↔ source mode toggle** — ensure markdown round-tripping still works
+6. **Verify the forwardRef warning is resolved** in the new version
+7. **Test save/load cycle** — confirm no regressions in file persistence
