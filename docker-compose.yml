@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - docs:/app/docs
+    env_file: .env
+
+volumes:
+  docs:
