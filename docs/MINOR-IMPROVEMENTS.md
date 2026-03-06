@@ -1,11 +1,17 @@
-- remember tabs and positions
-- manage system prompt in a SYSTEM-PROMPT.md file
-  - future select which md file
-- create a draft system prompt for a system Architect persona to help create requirements
-- option to delete previous chat request/response, individually or all at once (in current chat)
-- toggle for single shared chat or one per doc
-- option to load prior chat history
-- option to copy chat history to current md file
+- option to delete previous chat request/response, individually (there is button to clear chat)
+- option to save current doc as a different name
+- timer to show AI response time
+- counters for tokens in and out
+  - future support prompt cache
+- button to retry last chat request
+- option to copy chat history to current md file or clipboard
+- toggle for one chat per file or pin single shared chat
+
+- remember tabs and positions using browser storage, ignore files that no longer exist
+
+- select md file for system prompt
+- select model or specify in prompt md file
+- note: AI only changes current file!
 
 New Phase 2
 - undo/version history since auto-save could save mistakes by accident. 

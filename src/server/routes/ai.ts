@@ -45,7 +45,7 @@ aiRouter.post('/ai/chat', async (req: Request, res: Response) => {
   const { filePath, messages, documentContent, userName, summarise } = req.body;
   console.log(`[AI-Route] filePath=${filePath} messages=${messages?.length} docLen=${documentContent?.length} user=${userName}`);
 
-  if (!filePath || !messages || !documentContent) {
+  if (!filePath || !messages || documentContent === undefined || documentContent === null) {
     res.status(400).json({ error: 'Missing required fields: filePath, messages, documentContent' });
     return;
   }

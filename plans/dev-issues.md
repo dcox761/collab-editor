@@ -538,3 +538,30 @@ In Node.js >= 18 with Express:
 - **`req.on('close')`** fires when the request body is fully consumed (immediate for POST JSON) — DO NOT use for disconnect detection
 - **`res.on('close')`** fires when the response connection closes — use this for disconnect detection
 - Always guard with `res.writableFinished` to distinguish normal completion from premature disconnection
+
+---
+
+## DEV-ISSUE-016: AI chat returns 400 for empty documents
+
+### Symptom
+Creating a new `.md` file and immediately sending an AI chat message resulted in `400 Bad Request`. Server log showed `docLen=0`.
+
+### Root Cause
+The validation guard used `!documentContent`, which in JavaScript treats an empty string `""` as falsy. A newly created file legitimately has empty content, so the check incorrectly rejected it.
+
+### Diagnosis
+Server log: `filePath=example/test.md messages=1 docLen=0 user=User-9284` followed by the 400 response. The `!documentContent` expression evaluated to `true` for `""`.
+
+### Fix
+Changed the validation in `src/server/routes/ai.ts` from:
+```typescript
+if (!filePath || !messages || !documentContent) {
+```
+to:
+```typescript
+if (!filePath || !messages || documentContent === undefined || documentContent === null) {
+```
+This allows empty string `""` (new file) while still rejecting truly missing values.
+
+### Lesson Learned
+In JavaScript, empty string `""` is falsy. When validating request body fields that may legitimately be empty, use explicit `=== undefined || === null` (or `== null`) instead of `!value`. This is a common API validation gotcha.

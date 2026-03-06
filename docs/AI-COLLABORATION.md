@@ -832,6 +832,10 @@ User types message
 
 **Enhancement:** System prompt is no longer hardcoded. The AI service reads `docs/SYSTEM-PROMPT.md` on every request via `loadSystemPrompt()`, with a built-in fallback. The file can be edited within the editor itself and changes take effect on the next AI message. Controlled by `AI_TOOLS_ENABLED` env var for tool-calling support.
 
+### 27. Empty Document Validation Fix (DEV-ISSUE-016)
+
+**Bug:** Sending an AI chat message for a newly created (empty) file returned 400 Bad Request. The validation `!documentContent` treated empty string `""` as falsy. Fixed by switching to `documentContent === undefined || documentContent === null`.
+
 ### Files Modified
 
 | File | Changes |
@@ -839,8 +843,8 @@ User types message
 | `package.json` | `dev:server` script uses POSIX env sourcing |
 | `.env` | Removed `DOCS_PATH` and `PORT`; added `AI_TOOLS_ENABLED=true` |
 | `docker-compose.yml` | Added `environment:` block with `DOCS_PATH` and `PORT` |
-| `src/server/routes/ai.ts` | Fixed `req.on('close')` → `res.on('close')` with `writableFinished` guard; added `[AI-Route]` diagnostic logging |
+| `src/server/routes/ai.ts` | Fixed `req.on('close')` → `res.on('close')` with `writableFinished` guard; added `[AI-Route]` diagnostic logging; fixed empty-document validation (`!documentContent` → `=== undefined \|\| === null`) |
 | `src/server/services/aiService.ts` | Dynamic system prompt from `SYSTEM-PROMPT.md`; `AI_TOOLS_ENABLED` config; extensive `[AI]` diagnostic logging; text-based `<<<EDIT` fallback parser |
 | `src/client/hooks/useAiChat.ts` | Added `[Chat]` diagnostic logging for silent guard failures |
 | `docs/SYSTEM-PROMPT.md` | New file — architect persona system prompt, editable within the editor |
-| `plans/dev-issues.md` | Added DEV-ISSUE-013, 014, 015 |
+| `plans/dev-issues.md` | Added DEV-ISSUE-013, 014, 015, 016 |
