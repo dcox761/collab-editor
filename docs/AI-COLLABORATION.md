@@ -230,21 +230,57 @@ Core goal: add the AI chat sidebar so users can converse with an AI that reads a
 
 **Phase 1c outcome**: Multiple users can collaboratively edit Markdown documents and chat with an AI that reads the document, answers questions, and makes targeted edits — all visible in real time. No Git dependency.
 
-### Phase 2 — Git Integration & Polish
+### Phase 2 — Local Checkpoints & Document Navigation
+
+Core goal: protect against accidental auto-saved mistakes with automatic local checkpoints, and improve navigation within large documents.
+
+#### 2a. Local Checkpoints
+
+Auto-save (Phase 1b) persists every 5 seconds, which means mistakes can be saved before a user notices. Y.js provides in-session undo, and Git (Phase 3) will provide commit-level history, but a lightweight local checkpoint system fills the gap between the two.
+
+| Step | Deliverable |
+|---|---|
+| 2a.1 | Checkpoint service: on each 5-second save, also write a timestamped copy to `.checkpoints/` |
+| 2a.2 | Checkpoint retention policy — keep: every 1 min for the last 10 min, every 10 min for the last 1 hr, every 1 hr for the last 1 day, every 1 day for the last 5 days. Older checkpoints are pruned automatically. |
+| 2a.3 | Checkpoint storage layout: `.checkpoints/<relative-path>/<filename>.<ISO-timestamp>.md` mirroring the docs folder structure |
+| 2a.4 | `.checkpoints/` added to `.gitignore` so checkpoints are local-only and never committed |
+| 2a.5 | Checkpoint browser UI: toolbar button or menu to list previous versions of the current file with timestamps |
+| 2a.6 | Read-only checkpoint viewer: open a selected checkpoint in a read-only panel for inspection and copy/paste recovery |
+
+**Design notes**:
+- Checkpoints are plain Markdown files on disk — no database or special format required
+- The retention policy runs as a cleanup pass after each new checkpoint is written
+- Checkpoints are per-file, not whole-repo snapshots
+- The checkpoint viewer opens alongside the live editor (not replacing it) so users can copy content back
+
+#### 2b. Table of Contents Navigator
+
+Large Markdown documents need a way to quickly jump to sections without scrolling.
+
+| Step | Deliverable |
+|---|---|
+| 2b.1 | TOC panel: parse Markdown headings from Y.Text and display as a clickable outline tree |
+| 2b.2 | Click-to-scroll: clicking a heading in the TOC scrolls the Source editor to that heading |
+| 2b.3 | Active heading highlight: the TOC highlights whichever heading is currently visible in the viewport |
+| 2b.4 | Auto-update: TOC refreshes when the document content changes, debounced to avoid excessive re-parsing |
+
+**Phase 2 outcome**: Users are protected from accidental auto-saved mistakes by local checkpoints with time-based retention, and can navigate large documents via a table-of-contents outline.
+
+### Phase 3 — Git Integration & Polish
 
 Core goal: add Git version control, remote sync, and remaining features.
 
 | Step | Deliverable |
 |---|---|
-| 2.1 | Docker Compose updated to add Forgejo container |
-| 2.2 | Git sparse checkout and repository connection |
-| 2.3 | Basic Git operations: commit, push, pull, diff, log |
-| 2.4 | Merge conflict detection and resolution UI |
-| 2.5 | Periodic remote sync with user prompt to pull |
-| 2.6 | AI git commands via chat: commit, push, pull, branch, rollback, summarise changes |
-| 2.7 | AI audit trail logging |
+| 3.1 | Docker Compose updated to add Forgejo container |
+| 3.2 | Git sparse checkout and repository connection |
+| 3.3 | Basic Git operations: commit, push, pull, diff, log |
+| 3.4 | Merge conflict detection and resolution UI |
+| 3.5 | Periodic remote sync with user prompt to pull |
+| 3.6 | AI git commands via chat: commit, push, pull, branch, rollback, summarise changes |
+| 3.7 | AI audit trail logging |
 
-**Phase 2 outcome**: Full Git-backed collaborative editor with AI-assisted version control operations.
+**Phase 3 outcome**: Full Git-backed collaborative editor with AI-assisted version control operations.
 
 ## 10. Future Considerations
 
@@ -259,7 +295,7 @@ The following features are acknowledged but out of scope for the initial build:
 | Document templates | AI-generated, deferred to future |
 | Export to PDF/DOCX | Not initially required |
 | AI personas with configurable system prompts | Architect persona only initially |
-| Backup strategy for uncommitted work | Out of scope |
+| Backup strategy for uncommitted work | Addressed by Phase 2a local checkpoints; Git commits provide long-term history |
 
 ---
 
