@@ -1,11 +1,10 @@
-- file view refresh button
-- adjustable panel width
-- prompt for username if not set, store in browser local storage
-  - change username
-  - allow separate browser window/private to have a different user
-  - what will happen if the same user opens 2 windows? Auto add suffix but dont store in browser?
-- keep scroll and cursor position when switching source to review instead of returning to the top
-  - Future: open preview to side or in separate window and keep position in sync
-- undo/version history since auto-save could save mistakes by accident. There is local undo functionality to test. Make use of Git repo? Or maybe keep checkpoints every 5min, in the same folder, same name with dot prefix and time suffix. Ignored by Git repo. Keep maximum of 10. Need a way to select and open read-only for copy/paste. This is a significant feature to plan for later.
-
-
+- undo/version history since auto-save could save mistakes by accident. 
+  - There is already local undo functionality which should be working.
+  - Planned ability to commit to a Git repo.
+  - Still useful to keep local checkpoints.
+  - Checkpoints every 1min.
+  - Keep up to: every min for 10 min. Every 10 min for 1 hr. Every 1 hr for 1 day. Every 1 day for 5 days.
+  - Store in a .checkpoints folder which will be added to .gitignore.
+  - Match folder structure and filename with a timestamp suffix.
+  - Provide a method to see previous versions and open read-only for copy/pase.
+- TOC navigator to easily scroll through large files.
