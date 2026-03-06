@@ -84,6 +84,13 @@ export default function FileBrowser({ tree, refresh, activeFilePath, onFileSelec
         <div className="file-browser-actions">
           <button
             className="file-browser-btn"
+            onClick={refresh}
+            title="Refresh file tree"
+          >
+            🔄
+          </button>
+          <button
+            className="file-browser-btn"
             onClick={() => handleNewFile('')}
             title="New File"
           >

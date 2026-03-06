@@ -31,8 +31,7 @@ html, body, #root {
 }
 
 .panel-left {
-  width: 250px;
-  min-width: 200px;
+  flex-shrink: 0;
   background: #fafafa;
   border-right: 1px solid #e0e0e0;
 }
@@ -44,10 +43,25 @@ html, body, #root {
 }
 
 .panel-right {
-  width: 300px;
-  min-width: 200px;
+  flex-shrink: 0;
   background: #fafafa;
   border-left: 1px solid #e0e0e0;
+}
+
+/* === Resize Handle === */
+.resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s ease;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: #4f46e5;
 }
 
 /* === File Browser === */
@@ -242,8 +256,17 @@ html, body, #root {
 
 .editor-content {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 0;
+  position: relative;
+}
+
+.editor-view-container {
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  position: absolute;
+  inset: 0;
 }
 
 .editor-empty {
@@ -347,8 +370,21 @@ html, body, #root {
   border-color: #4f46e5;
 }
 
-.connection-status {
+.toolbar-btn-username {
   margin-left: auto;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar-btn-username:hover {
+  background: #e8e8ff;
+  color: #4f46e5;
+}
+
+.connection-status {
+  margin-left: 8px;
   font-size: 11px;
   font-weight: 500;
 }
