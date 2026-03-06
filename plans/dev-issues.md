@@ -433,3 +433,108 @@ Two changes:
 
 ### Lesson Learned
 When bridging two text systems (Y.Text CRDT ↔ CodeMirror), **line-ending normalisation is mandatory at the ingestion boundary**. CodeMirror unconditionally normalises to `\n`, so any content entering Y.Text must match. A mismatch of even 1 character per line creates an accumulating offset that corrupts every subsequent position-based operation. The fix belongs at the lowest common entry point (file read), not scattered across consumers. Additionally, `\r\n` files will always exist in the wild (Windows, Git `autocrlf`), so this normalisation is not optional.
+
+---
+
+## DEV-ISSUE-013: .env not loading in dev mode
+
+**Date**: 2026-03-06
+**Severity**: High — AI features completely non-functional
+**Status**: Fixed
+**Affected file**: `package.json`
+
+### Symptom
+Setting `AI_ENDPOINT` in `.env` had no effect in dev mode. The server always reported AI as disabled (`AI_ENDPOINT` was empty string).
+
+### Root Cause
+No `dotenv` package was installed, and Node.js `tsx` does not support `--env-file`. Docker Compose had `env_file: .env` but this only applies inside containers, not during `npm run dev`. Two failed attempts:
+1. `tsx --env-file=.env watch` — tsx consumed the flag and tried to execute `watch` as a module (`ERR_MODULE_NOT_FOUND`)
+2. `NODE_OPTIONS='--env-file=.env'` — Node.js disallows `--env-file` in `NODE_OPTIONS`
+
+### Fix
+Used POSIX shell sourcing in `package.json`:
+```json
+"dev:server": "set -a && . ./.env && set +a && tsx watch src/server/index.ts"
+```
+`set -a` marks all sourced variables for export; `set +a` stops marking new variables.
+
+### Lesson Learned
+When avoiding `dotenv` as a dependency, POSIX `set -a && . ./.env && set +a` is the most portable shell-based alternative. The `--env-file` flag is a Node.js >= 20 feature but cannot be used via `NODE_OPTIONS` or passed through `tsx`.
+
+---
+
+## DEV-ISSUE-014: File browser only showing one file after .env fix
+
+**Date**: 2026-03-06
+**Severity**: Medium — misleading file list
+**Status**: Fixed
+**Affected files**: `.env`, `docker-compose.yml`
+
+### Symptom
+After fixing DEV-ISSUE-013, the file browser only showed `example/nested-doc.md` instead of all files in the `docs/` directory.
+
+### Root Cause
+The `.env` file contained `DOCS_PATH=/app/docs` (a Docker container path). After the env sourcing fix, this Docker-specific path was now loaded in dev mode, overriding the fallback in `src/server/index.ts:16` (`path.join(__dirname, '../../docs')`). The path `/app/docs` doesn't exist on the host, so no files were found except those already cached.
+
+### Fix
+1. Removed `DOCS_PATH` and `PORT` from `.env` (these are deployment-specific)
+2. Added them to `docker-compose.yml` under the `environment:` block:
+   ```yaml
+   environment:
+     DOCS_PATH: /app/docs
+     PORT: "3000"
+   ```
+3. The server's fallback `DOCS_PATH || path.join(__dirname, '../../docs')` now correctly resolves in dev mode
+
+### Lesson Learned
+Separate Docker-specific environment variables from shared config. `.env` should only contain variables that apply in **all** environments. Container-specific paths belong in `docker-compose.yml` `environment:` (which takes precedence over `env_file:`).
+
+---
+
+## DEV-ISSUE-015: AI SSE stream aborted immediately — empty response
+
+**Date**: 2026-03-06
+**Severity**: Critical — AI chat completely broken
+**Status**: Fixed
+**Affected file**: `src/server/routes/ai.ts`
+
+### Symptom
+AI chat returned empty responses. The server sent correct SSE headers (`200 OK`, `text/event-stream`) but zero bytes of event data. Server logs showed:
+```
+[AI-Route] POST /api/ai/chat received
+[AI-Route] Queue position: 0
+[AI-Route] Client disconnected
+[AI-Route] Request was cancelled while queued
+```
+
+### Root Cause
+The route used `req.on('close', ...)` to detect client disconnection and cancel the AI request. In Node.js >= 18, `req.on('close')` fires when the **request body stream** has been fully consumed — which happens **immediately** for a small JSON POST body. This is NOT the same as the client disconnecting.
+
+The event handler set `cancelled = true` and called `queueResult.cancel()`. Even though the queue position was 0 (execute immediately), the `cancelled` check after `await queueResult.promise` saw `true` and aborted:
+```typescript
+if (cancelled) {
+  releaseQueue(roomName);
+  res.end();
+  return;
+}
+```
+
+### Fix
+Switched from `req.on('close')` to `res.on('close')` with a `writableFinished` guard:
+```typescript
+res.on('close', () => {
+  if (!res.writableFinished) {
+    console.log('[AI-Route] Client disconnected before response finished');
+    cancelled = true;
+    controller.abort();
+    queueResult.cancel();
+  }
+});
+```
+`res.on('close')` fires when the **response** connection closes. The `writableFinished` check ensures we only treat it as a disconnection if we haven't already completed writing.
+
+### Lesson Learned
+In Node.js >= 18 with Express:
+- **`req.on('close')`** fires when the request body is fully consumed (immediate for POST JSON) — DO NOT use for disconnect detection
+- **`res.on('close')`** fires when the response connection closes — use this for disconnect detection
+- Always guard with `res.writableFinished` to distinguish normal completion from premature disconnection

@@ -3,6 +3,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { filesRouter } from './routes/files.js';
+import { aiRouter } from './routes/ai.js';
 import { setupYjsWebSocket } from './ws/yjsHandler.js';
 import { initPersistence, stopPersistence, saveAllDirty } from './services/yjsPersistence.js';
 import { destroyAllRooms } from './services/yjsService.js';
@@ -21,6 +22,7 @@ app.use(express.json());
 
 // API routes
 app.use('/api', filesRouter);
+app.use('/api', aiRouter);
 
 // Serve static client files in production
 const clientPath = path.join(__dirname, '../client');

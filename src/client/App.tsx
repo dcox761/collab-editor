@@ -7,6 +7,7 @@ import UsernameDialog from './components/UsernameDialog';
 import { useFileTree } from './hooks/useFileTree';
 import { useOpenFiles } from './hooks/useOpenFiles';
 import { useUserIdentity } from './hooks/useUserIdentity';
+import { useYjsProvider } from './hooks/useYjsProvider';
 
 const MIN_LEFT = 150;
 const MIN_RIGHT = 150;
@@ -32,6 +33,9 @@ export default function App() {
     showChangeDialog,
     setShowChangeDialog,
   } = useUserIdentity();
+
+  // Y.js provider lifted here so both EditorPanel and ChatPanel share the same state
+  const yjsState = useYjsProvider(activeFilePath);
 
   const [leftWidth, setLeftWidth] = useState(DEFAULT_LEFT);
   const [rightWidth, setRightWidth] = useState(DEFAULT_RIGHT);
@@ -70,11 +74,19 @@ export default function App() {
           onTabClose={closeFile}
           sessionName={sessionName}
           onChangeUsername={() => setShowChangeDialog(true)}
+          yText={yjsState?.yText ?? null}
+          awareness={yjsState?.awareness ?? null}
+          connected={yjsState?.connected ?? false}
         />
       </main>
       <ResizeHandle onResize={handleRightResize} />
       <aside className="panel panel-right" style={{ width: rightWidth, minWidth: MIN_RIGHT }}>
-        <ChatPanel />
+        <ChatPanel
+          activeFilePath={activeFilePath}
+          identity={identity}
+          yText={yjsState?.yText ?? null}
+          awareness={yjsState?.awareness ?? null}
+        />
       </aside>
 
       {/* Username prompt on first visit */}

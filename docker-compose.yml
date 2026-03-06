@@ -6,6 +6,9 @@ services:
     volumes:
       - docs:/app/docs
     env_file: .env
+    environment:
+      DOCS_PATH: /app/docs
+      PORT: "3000"
 
 volumes:
   docs:

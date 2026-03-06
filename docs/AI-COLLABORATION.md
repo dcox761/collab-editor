@@ -617,3 +617,230 @@ A batch of quality-of-life improvements requested in `docs/MINOR-IMPROVEMENTS.md
 **Future**: Side-by-side Source+Preview mode and synchronized scroll position between the two views are noted as future enhancements.
 
 **Files changed**: `src/client/components/Editor/EditorPanel.tsx`, `src/client/styles/global.css`
+
+---
+
+## Phase 1c — AI Chat Integration — Implementation Log
+
+### Date: 6 March 2026
+
+### Overview
+
+Phase 1c delivered the AI chat sidebar with streaming responses, document context injection, per-room request queuing, and surgical document editing via Y.js operations. All six steps from `plans/phase-1c-plan.md` were implemented. The AI features gracefully degrade when `AI_ENDPOINT` is not configured — the editor remains fully functional as a collaborative Markdown editor.
+
+### Architecture
+
+```
+User types message
+  → ChatPanel → useAiChat hook
+    → POST /api/ai/chat (SSE stream)
+      → aiService.ts: enqueue, build context, stream from OpenAI-compatible API
+        ← SSE events: delta | edit | queued | error | done
+      → useAiChat parses SSE, appends deltas to message
+        → If edit events: applyAiEdits(yText, edits) — Y.js transaction
+          → All peers see edits in real time via Y.js sync
+```
+
+### Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Edit application | Client-side via Y.js | Edits go through Y.js CRDT, automatically sync to all peers |
+| Ambiguous edits (multiple matches) | Apply to first match | Simple, predictable; user can refine with follow-up prompt |
+| Cross-document context | Deferred to future phase | Keeps Phase 1c scope manageable |
+| Streaming protocol | SSE over POST response | No extra WebSocket needed; works with existing Express setup |
+| Request queuing | Per-room in-memory queue | Prevents parallel AI calls from corrupting context |
+| Token estimation | `Math.ceil(text.length / 4)` heuristic | Good enough without a tokenizer dependency |
+| Edit detection | Tool calls + text-based `<<<EDIT` fallback | Works with models that support function calling and those that don't |
+
+### 16. Chat Panel UI (Step 1c.1)
+
+**Feature**: Full chat interface in the right sidebar panel, replacing the placeholder. Scrollable message history with role-based styling (user/assistant/system), auto-resizing text input, send button, cancel button for in-flight requests, and inline edit confirmation display.
+
+**Implementation**:
+- `ChatPanel.tsx` — orchestrates the chat UI, wires up `useChatHistory` and `useAiChat` hooks, auto-scrolls to latest message, shows AI-unavailable state when `AI_ENDPOINT` is not configured
+- `ChatMessage.tsx` — individual message bubble with role icon (👤/🤖/ℹ️), timestamp, streaming ellipsis indicator, and `EditConfirmation` for applied edits
+- `ChatInput.tsx` — auto-resizing textarea (max 120px), Enter to send, Shift+Enter for newlines, disabled during streaming
+- `EditConfirmation.tsx` — inline diff display showing search (red) and replace (green) blocks with applied/failed status indicators
+- Comprehensive CSS styles for all chat components including queue indicator, summarise prompt dialog, error display
+
+**Files created**: `src/client/components/ChatPanel/ChatPanel.tsx` (rewritten), `src/client/components/ChatPanel/ChatMessage.tsx`, `src/client/components/ChatPanel/ChatInput.tsx`, `src/client/components/ChatPanel/EditConfirmation.tsx`
+**Files changed**: `src/client/styles/global.css`
+
+### 17. Chat History Persistence (Step 1c.2)
+
+**Feature**: Chat messages persist in browser `localStorage` keyed by `collab-chat:{filePath}`, surviving page refreshes. Each document tab has independent chat history. Maximum 200 messages per document (oldest trimmed on overflow).
+
+**Implementation**:
+- `useChatHistory` hook manages the message array with `addMessage`, `updateMessage`, and `clearHistory` operations
+- Messages are serialised to JSON in localStorage on every change via `useEffect`
+- Each message has: `id` (crypto.randomUUID), `role`, `content`, `timestamp`, and optional `edits` array
+- Messages load from localStorage on mount, keyed by active file path
+
+**Files created**: `src/client/hooks/useChatHistory.ts`
+
+### 18. AI Backend with Streaming (Step 1c.3)
+
+**Feature**: Express routes that proxy AI requests to any OpenAI-compatible endpoint (Ollama, Claude API, OpenAI, etc.) with SSE streaming responses.
+
+**Implementation**:
+- `aiService.ts` — core service with:
+  - Config from environment variables: `AI_ENDPOINT`, `AI_API_KEY`, `AI_MODEL`, `AI_MAX_TOKENS`, `AI_CONTEXT_WINDOW`
+  - `streamAiChat()` — uses native `fetch` to call OpenAI chat completions API, parses SSE chunks, yields structured events (delta, tool_call, done)
+  - Tool definition: `edit_document` function with `edits` array parameter (search/replace pairs)
+  - Text-based edit fallback: parses `<<<EDIT ... >>>` blocks for models without function calling
+  - Audit logging with `[AI-Audit]` prefix for all requests and edits
+  - System prompt uses "Architect" persona as specified in Section 7.4
+- `ai.ts` routes:
+  - `GET /api/ai/config` — returns `{ enabled, model }` for client feature detection
+  - `GET /api/ai/budget` — returns token budget information
+  - `POST /api/ai/chat` — SSE streaming endpoint with abort controller support
+
+**Files created**: `src/server/services/aiService.ts`, `src/server/routes/ai.ts`
+**Files changed**: `src/server/index.ts` (registered AI routes)
+
+### 19. Document Context Injection (Step 1c.4)
+
+**Feature**: The AI receives the current document content and chat history as context with each request. When the document exceeds the context budget, users are prompted to send a summarised version.
+
+**Implementation**:
+- `buildMessages()` in aiService constructs the message array: system prompt → document context → chat history (newest first, fitting token budget)
+- `summariseDocument()` makes a preliminary AI call to compress large documents before including them as context
+- `getContextBudget()` returns token limits for client-side budget display
+- Client-side `useAiChat` hook detects when summarisation is needed via `needsSummarisation` flag
+- `ChatPanel` shows a summarise prompt dialog when the document exceeds the context budget, letting the user choose to summarise or send as-is
+
+**Files changed**: `src/server/services/aiService.ts`, `src/client/hooks/useAiChat.ts`, `src/client/components/ChatPanel/ChatPanel.tsx`
+
+### 20. Context Management & Queuing (Step 1c.5)
+
+**Feature**: Per-room request queuing prevents parallel AI calls. Queue depth is limited to 5 with a 120-second timeout. Other users see an "AI thinking" indicator in the presence bar.
+
+**Implementation**:
+- `enqueueRequest()` / `releaseQueue()` in aiService manage an in-memory queue per room (keyed by file path)
+- Queue returns position to client via `queued` SSE event type
+- Client `useAiChat` tracks `isQueued` and `queuePosition` state, displayed as a queue indicator in the chat panel
+- `PresenceBar.tsx` detects `aiThinking` flag from Y.js awareness states and shows a 🤖 "AI thinking..." indicator with pulse animation
+- `useAiChat` sets/clears `awareness.setLocalStateField('aiThinking', true/false)` during AI requests
+
+**Files changed**: `src/server/services/aiService.ts`, `src/client/hooks/useAiChat.ts`, `src/client/components/Editor/PresenceBar.tsx`, `src/client/styles/global.css`
+
+### 21. AI Surgical Editing via Y.js (Step 1c.6)
+
+**Feature**: AI edits are applied as targeted search/replace operations within a single Y.js transaction, preserving cursor positions and propagating to all peers in real time.
+
+**Implementation**:
+- `applyAiEdits(yText, edits)` in `applyAiEdits.ts`:
+  - Finds each search string in the document text using `indexOf`
+  - Sorts matches in reverse document order to maintain correct indices during sequential edits
+  - Applies all edits in a single `yText.doc.transact()` with `'ai-edit'` as origin tag
+  - Returns `EditResult[]` with success/failure status for each edit
+  - Applies to first match when multiple exist (user decision)
+- Results are displayed inline in chat messages via `EditConfirmation` component
+- Failed edits (search string not found) are shown with a ❌ indicator
+
+**Files created**: `src/client/services/applyAiEdits.ts`
+
+### 22. App-Level Y.js State Sharing
+
+**Feature**: Lifted `useYjsProvider` from EditorPanel to App.tsx so both EditorPanel and ChatPanel share the same Y.js document state and awareness instance.
+
+**Implementation**:
+- `App.tsx` calls `useYjsProvider(activeFilePath)` and passes `yText`, `awareness`, `connected` as props to both EditorPanel and ChatPanel
+- `EditorPanel` no longer calls `useYjsProvider` internally — receives Y.js state as props
+- This ensures ChatPanel operates on the exact same Y.Text instance that the editor uses
+
+**Files changed**: `src/client/App.tsx`, `src/client/components/Editor/EditorPanel.tsx`
+
+### Environment Variables Added
+
+```bash
+# AI Configuration (all optional — AI features disabled when AI_ENDPOINT is unset)
+# AI_ENDPOINT=http://localhost:11434/v1
+# AI_API_KEY=
+# AI_MODEL=llama3
+# AI_MAX_TOKENS=4096
+# AI_CONTEXT_WINDOW=8192
+```
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `src/client/hooks/useChatHistory.ts` | localStorage persistence for chat messages |
+| `src/client/hooks/useAiChat.ts` | Client streaming hook with SSE parsing |
+| `src/client/services/applyAiEdits.ts` | Y.js surgical editing (search/replace) |
+| `src/client/components/ChatPanel/ChatPanel.tsx` | Full chat interface (rewritten from placeholder) |
+| `src/client/components/ChatPanel/ChatMessage.tsx` | Individual message bubble component |
+| `src/client/components/ChatPanel/ChatInput.tsx` | Auto-resizing text input component |
+| `src/client/components/ChatPanel/EditConfirmation.tsx` | Inline edit diff display |
+| `src/server/services/aiService.ts` | AI proxy service with streaming and queuing |
+| `src/server/routes/ai.ts` | Express routes for AI endpoints |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/server/index.ts` | Registered AI routes (`app.use('/api', aiRouter)`) |
+| `src/client/App.tsx` | Lifted `useYjsProvider` to app level, pass props to both panels |
+| `src/client/components/Editor/EditorPanel.tsx` | Accept Y.js state as props instead of internal hook |
+| `src/client/components/Editor/PresenceBar.tsx` | AI thinking indicator from awareness states |
+| `src/client/styles/global.css` | Comprehensive chat panel styles, AI thinking animation |
+| `.env` | Added commented-out AI configuration variables |
+
+### Build Verification
+
+| Check | Result |
+|-------|--------|
+| `tsc --noEmit` | ✅ No type errors |
+| `vite build` | ✅ Built successfully (10.63s, 1429 modules) |
+
+### Known Limitations — Phase 1c by Design
+
+- **No cross-document context**: AI only sees the currently active document. Cross-referencing other open documents is deferred.
+- **No persistent audit log**: AI audit trail is logged to server console only. Database-backed logging deferred.
+- **No retry on transient AI failures**: User must re-send the message manually.
+- **Token estimation is approximate**: Uses `text.length / 4` heuristic, not a real tokenizer.
+- **Queue is in-memory**: Server restart clears the queue. Acceptable for single-server deployment.
+
+---
+
+## Phase 1c — Post-Implementation Fixes
+
+### 23. .env Not Loading in Dev Mode (DEV-ISSUE-013)
+
+**Problem:** `AI_ENDPOINT` set in `.env` had no effect during `npm run dev` — no `dotenv` package and `tsx` doesn't support `--env-file`.
+
+**Fix:** Changed `package.json` `dev:server` script to use POSIX shell sourcing:
+```json
+"dev:server": "set -a && . ./.env && set +a && tsx watch src/server/index.ts"
+```
+
+### 24. Docker-Specific Env Vars Breaking Dev Mode (DEV-ISSUE-014)
+
+**Problem:** After env fix, `DOCS_PATH=/app/docs` from `.env` overrode the dev-mode fallback, causing the file browser to show only cached files.
+
+**Fix:** Moved `DOCS_PATH` and `PORT` from `.env` to `docker-compose.yml` `environment:` block. `.env` now contains only shared config (AI settings).
+
+### 25. AI SSE Stream Aborted Immediately (DEV-ISSUE-015)
+
+**Problem:** `req.on('close')` in the `/api/ai/chat` route fired immediately after the POST body was consumed (Node.js >= 18 behavior), setting `cancelled = true` and aborting the AI stream before it started. Every request returned 200 OK with SSE headers but zero bytes of event data.
+
+**Fix:** Switched to `res.on('close')` with a `res.writableFinished` guard to correctly detect only premature client disconnection.
+
+### 26. Dynamic System Prompt via SYSTEM-PROMPT.md
+
+**Enhancement:** System prompt is no longer hardcoded. The AI service reads `docs/SYSTEM-PROMPT.md` on every request via `loadSystemPrompt()`, with a built-in fallback. The file can be edited within the editor itself and changes take effect on the next AI message. Controlled by `AI_TOOLS_ENABLED` env var for tool-calling support.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `package.json` | `dev:server` script uses POSIX env sourcing |
+| `.env` | Removed `DOCS_PATH` and `PORT`; added `AI_TOOLS_ENABLED=true` |
+| `docker-compose.yml` | Added `environment:` block with `DOCS_PATH` and `PORT` |
+| `src/server/routes/ai.ts` | Fixed `req.on('close')` → `res.on('close')` with `writableFinished` guard; added `[AI-Route]` diagnostic logging |
+| `src/server/services/aiService.ts` | Dynamic system prompt from `SYSTEM-PROMPT.md`; `AI_TOOLS_ENABLED` config; extensive `[AI]` diagnostic logging; text-based `<<<EDIT` fallback parser |
+| `src/client/hooks/useAiChat.ts` | Added `[Chat]` diagnostic logging for silent guard failures |
+| `docs/SYSTEM-PROMPT.md` | New file — architect persona system prompt, editable within the editor |
+| `plans/dev-issues.md` | Added DEV-ISSUE-013, 014, 015 |

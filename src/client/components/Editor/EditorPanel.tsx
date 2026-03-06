@@ -1,9 +1,10 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
+import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
 import TabBar from './TabBar';
 import SourceEditor from './SourceEditor';
 import PreviewPanel from './PreviewPanel';
 import PresenceBar from './PresenceBar';
-import { useYjsProvider } from '../../hooks/useYjsProvider';
 import type { OpenFile } from '../../hooks/useOpenFiles';
 
 type ViewMode = 'source' | 'preview';
@@ -17,6 +18,12 @@ interface EditorPanelProps {
   sessionName: string;
   /** Callback to open the change-username dialog */
   onChangeUsername: () => void;
+  /** Y.Text from the shared Y.js provider (lifted to App) */
+  yText: Y.Text | null;
+  /** Awareness from the shared Y.js provider */
+  awareness: Awareness | null;
+  /** Whether the Y.js WebSocket is connected */
+  connected: boolean;
 }
 
 export default function EditorPanel({
@@ -26,6 +33,9 @@ export default function EditorPanel({
   onTabClose,
   sessionName,
   onChangeUsername,
+  yText,
+  awareness,
+  connected,
 }: EditorPanelProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('source');
 
@@ -33,9 +43,6 @@ export default function EditorPanel({
   // so we can keep them mounted for scroll/cursor preservation
   const [hasShownSource, setHasShownSource] = useState(true);
   const [hasShownPreview, setHasShownPreview] = useState(false);
-
-  // Y.js provider manages the collaborative document for the active file
-  const yjsState = useYjsProvider(activeFilePath);
 
   // Reset which panels have been shown when active file changes
   const prevFileRef = useRef(activeFilePath);
@@ -56,7 +63,7 @@ export default function EditorPanel({
 
   // Publish session identity to Y.js awareness for cursor/presence sharing
   useEffect(() => {
-    if (!yjsState?.awareness) return;
+    if (!awareness) return;
     // Read color from localStorage
     let color = '#888';
     try {
@@ -68,11 +75,11 @@ export default function EditorPanel({
     } catch {
       // ignore
     }
-    yjsState.awareness.setLocalStateField('user', {
+    awareness.setLocalStateField('user', {
       name: sessionName,
       color,
     });
-  }, [yjsState?.awareness, sessionName]);
+  }, [awareness, sessionName]);
 
   // Ctrl+S / Cmd+S → force-save via the Y.js persistence endpoint
   const handleSave = useCallback(async () => {
@@ -129,9 +136,9 @@ export default function EditorPanel({
           >
             Preview
           </button>
-          {yjsState && (
+          {awareness && (
             <>
-              <PresenceBar awareness={yjsState.awareness} />
+              <PresenceBar awareness={awareness} />
               <button
                 className="toolbar-btn toolbar-btn-username"
                 onClick={onChangeUsername}
@@ -139,8 +146,8 @@ export default function EditorPanel({
               >
                 👤 {sessionName}
               </button>
-              <span className={`connection-status ${yjsState.connected ? 'connected' : 'disconnected'}`}>
-                {yjsState.connected ? '● Connected' : '○ Disconnected'}
+              <span className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
+                {connected ? '● Connected' : '○ Disconnected'}
               </span>
             </>
           )}
@@ -149,27 +156,27 @@ export default function EditorPanel({
       <div className="editor-content">
         {/* Render both Source and Preview but hide the inactive one.
             This preserves CodeMirror scroll position and cursor when toggling. */}
-        {activeFilePath && yjsState && hasShownSource && (
+        {activeFilePath && yText && hasShownSource && (
           <div
             className="editor-view-container"
             style={{ display: viewMode === 'source' ? 'flex' : 'none' }}
           >
             <SourceEditor
               key={activeFilePath}
-              yText={yjsState.yText}
-              awareness={yjsState.awareness}
-              connected={yjsState.connected}
+              yText={yText}
+              awareness={awareness!}
+              connected={connected}
             />
           </div>
         )}
-        {activeFilePath && yjsState && hasShownPreview && (
+        {activeFilePath && yText && hasShownPreview && (
           <div
             className="editor-view-container"
             style={{ display: viewMode === 'preview' ? 'flex' : 'none' }}
           >
             <PreviewPanel
               key={`preview-${activeFilePath}`}
-              yText={yjsState.yText}
+              yText={yText}
             />
           </div>
         )}
