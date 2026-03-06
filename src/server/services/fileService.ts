@@ -24,10 +24,14 @@ function safePath(docsRoot: string, relativePath: string): string {
 
 /**
  * Read a markdown file and return its content.
+ * Line endings are normalised to LF (\n) because CodeMirror uses LF internally.
+ * If CRLF (or standalone CR) is left in Y.Text, position indices desync with
+ * the CM document — each \r\n counts as 2 chars in Y.Text but 1 in CM.
  */
 export async function readFileContent(docsRoot: string, relativePath: string): Promise<string> {
   const fullPath = safePath(docsRoot, relativePath);
-  return fs.readFile(fullPath, 'utf-8');
+  const raw = await fs.readFile(fullPath, 'utf-8');
+  return raw.replace(/\r\n?/g, '\n');
 }
 
 /**

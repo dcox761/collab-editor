@@ -7,6 +7,7 @@ import {
   deleteFileOrDir,
   renameFileOrDir,
 } from '../services/fileService.js';
+import { forceSave } from '../services/yjsPersistence.js';
 
 export const filesRouter = Router();
 
@@ -134,5 +135,26 @@ filesRouter.patch('/files/*', async (req: Request, res: Response) => {
       console.error('Error renaming:', err);
       res.status(500).json({ error: 'Failed to rename' });
     }
+  }
+});
+
+// Force-save a Y.js document to disk (triggered by Ctrl+S)
+filesRouter.post('/save/*', async (req: Request, res: Response) => {
+  try {
+    const filePath = (req.params as Record<string, string>)[0];
+    if (!filePath) {
+      res.status(400).json({ error: 'File path is required' });
+      return;
+    }
+    const saved = await forceSave(filePath);
+    if (saved) {
+      res.json({ success: true });
+    } else {
+      // No active Y.js room for this file — nothing to save
+      res.json({ success: true, note: 'No active collaboration session' });
+    }
+  } catch (err) {
+    console.error('Error force-saving:', err);
+    res.status(500).json({ error: 'Failed to save' });
   }
 });

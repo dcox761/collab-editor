@@ -260,3 +260,176 @@ Introduced a `pendingMarkdownRef` that stores the markdown to load when switchin
 
 ### Lesson Learned
 When conditionally rendering editor components (e.g., toggling between textarea and BlockNote), any programmatic content updates must be deferred until after the target component has mounted. Use a pending-content ref pattern and sync in a `useEffect` that runs after render.
+
+---
+
+## DEV-ISSUE-009: Source editor empty on first file open (Y.js sync race)
+
+**Date**: 2026-03-05
+**Severity**: High — editor appears broken on first use
+**Status**: Fixed
+**Affected file**: `src/server/ws/yjsHandler.ts`
+
+### Symptom
+Opening any markdown file for the first time showed an empty source editor. The connection indicator showed "Connected" but no content appeared. Clicking a different file and then clicking back to the original file displayed the content correctly.
+
+### Root Cause
+Race condition in `handleConnection()`. The function was `async` and `await`ed `loadDocFromDisk()` (disk I/O) **before** registering `ws.on('message', ...)`. During the `await`, the y-websocket client immediately sent its sync step 1 message (containing its state vector) and an awareness update — 2 messages total. With no listener registered on the WebSocket, Node's EventEmitter silently discarded them.
+
+Without the client's sync step 1, the server never knew what the client was missing, so it never sent sync step 2 (the actual document content). The client remained empty.
+
+Re-opening the same file worked because the room was still cached in memory for 30 seconds (`isNew=false`), meaning no `await` occurred — the message handler was registered synchronously and no messages were dropped.
+
+### Diagnosis
+Added a temporary buffer listener before the `await` to count messages arriving during async setup:
+```
+[Y.js WS DEBUG] Room example/nested-doc.md: earlyMessages=2, yText.length=447, isNew=true   ← BROKEN
+[Y.js WS DEBUG] Room example/nested-doc.md: earlyMessages=0, yText.length=447, isNew=false  ← WORKS
+```
+Client-side logs confirmed `yText.length=0` even after `connected=true`, and no `synced` event ever fired.
+
+### Fix
+Restructured `handleConnection()` to buffer WebSocket messages during async setup and replay them after:
+
+1. **Immediate buffer listener** — `ws.on('message', bufferListener)` registered synchronously at connection time, capturing all messages into an array during async disk I/O
+2. **Handler swap** — After `await loadDocFromDisk()` completes, the buffer listener is replaced with the real `handleMessage` function via `ws.off('message', bufferListener); ws.on('message', handleMessage)`
+3. **Replay** — Any buffered messages are fed through `handleMessage()` in order, completing the sync protocol that would otherwise have been lost
+
+Server log now confirms: `Replaying 2 buffered message(s) for room: example/nested-doc.md`
+
+### Lesson Learned
+In async WebSocket handlers, **register the message listener synchronously before any `await`**. Node's EventEmitter drops events that have no listeners — they are not queued. When async initialisation is unavoidable, use a buffer-and-replay pattern: capture incoming messages in an array during the async window, then process them after setup completes.
+
+---
+
+## DEV-ISSUE-010: Collaborative text edits not syncing between users
+
+**Date**: 2026-03-05
+**Severity**: High — core collaboration broken
+**Status**: Fixed
+**Affected file**: `src/server/ws/yjsHandler.ts`
+
+### Symptom
+Two users could connect to the same document and see each other's presence (cursors, user names in the PresenceBar), but text typed by one user never appeared for the other. The file was correctly saved to disk (char count increased in persistence logs), but the second browser window's editor remained unchanged.
+
+### Root Cause
+The `docUpdateHandler` closure in `handleConnection()` was registered **per client connection** on the shared `doc.on('update', ...)`. Each handler's closure captured its own `ws` variable — the WebSocket for that specific client.
+
+When Client A typed:
+1. Client A's sync message → server applied update to Y.Doc with `origin = ws_A`
+2. **Client A's handler** (`ws = ws_A`): `origin === ws` → `ws_A === ws_A` → correctly **skipped** (no echo)
+3. **Client B's handler** (`ws = ws_B`): `origin === ws` → `ws_A === ws_B` → **proceeded** → called `broadcastToRoom(wss, ws, roomName, message)` where `ws = ws_B` → **excluded Client B** from the broadcast
+
+Client B's handler was broadcasting to everyone *except itself* — but Client B was the one that needed the update. With only 2 clients, the update went to Client A (who already had it) and was excluded from Client B (who needed it).
+
+### Diagnosis
+Added debug logging to `docUpdateHandler` and `broadcastToRoom`:
+```
+[Y.js DEBUG] docUpdateHandler fired for room=example/nested-doc.md, origin===ws? false, will broadcast excluding ws (this client). This client IS the one that should RECEIVE the update.
+[Y.js DEBUG] broadcastToRoom room=example/nested-doc.md: sent=1, skipped(excluded)=1
+```
+This confirmed: `sent=1` (sent to the origin client that already had it), `skipped=1` (the client that needed the update was excluded).
+
+### Fix
+Changed the per-client `docUpdateHandler` from `broadcastToRoom(wss, ws, roomName, message)` to `send(ws, message)`. Each per-connection handler now sends the update directly to its own client. The `origin === ws` guard still prevents echoing back to the sender.
+
+Before:
+```typescript
+broadcastToRoom(wss, ws, roomName, message);  // Excludes THIS client
+```
+
+After:
+```typescript
+send(ws, message);  // Sends TO this client (the one that needs it)
+```
+
+### Lesson Learned
+When using per-connection event handlers on a shared Y.Doc, each handler represents **one client's perspective**. The handler should send updates **to** its own client, not broadcast to everyone else. The broadcast pattern works when there's a single doc-level handler, but with per-connection handlers, the `exclude` parameter inverts the intent — it excludes the very client that the handler is responsible for.
+
+---
+
+## DEV-ISSUE-011: Externally reverted file shows stale content on reopen
+
+**Date**: 2026-03-05
+**Severity**: High — stale content displayed and persisted, overwriting external changes
+**Status**: Fixed
+**Affected files**: `src/server/services/yjsService.ts`, `src/server/services/yjsPersistence.ts`, `src/server/ws/yjsHandler.ts`
+
+### Symptom
+Opening a document, saving it (Ctrl+S), closing the tab, reverting the file on the OS (e.g. `git checkout`, manual edit, or restoring a backup), then reopening the file in the editor showed the **old saved version** instead of the reverted filesystem content.
+
+### Root Cause
+Two compounding issues in the server-side Y.js document lifecycle:
+
+1. **30-second grace period prevents disk re-read.** When the last client disconnects, `removeClient()` in `yjsService.ts` schedules room destruction after `CLEANUP_DELAY_MS = 30_000` (30 seconds). If the user reopens the file within that window, `getOrCreateDoc()` finds the existing room (`isNew: false`) and returns the stale in-memory Y.Doc — `loadDocFromDisk()` is never called. External filesystem changes are invisible.
+
+2. **Cleanup callback unconditionally overwrites disk.** When the grace period expires, the cleanup callback in `yjsHandler.ts` always called `saveDocToDisk()` before destroying the room — even if no user edits had occurred since the last save. This wrote the stale in-memory content back to disk, overwriting the OS-level revert. So even waiting longer than 30 seconds didn't help: the file on disk was already overwritten by the time the room was destroyed.
+
+### Fix
+Three coordinated changes:
+
+1. **`yjsService.ts` — `getOrCreateDoc()` returns `wasGracePeriod` flag.** When a room is found with a pending cleanup timer (idle, no clients), the timer is cancelled and a `wasGracePeriod: true` flag is returned alongside the doc. This lets the caller know the room was idle and may have stale content.
+
+2. **`yjsPersistence.ts` — New `reloadDocFromDisk()` and `isDirty()` functions.**
+   - `reloadDocFromDisk()` reads the file from disk, compares to in-memory Y.Text content, and if they differ, replaces the Y.Doc content via `yText.delete()` + `yText.insert()` in a single transaction. If the file was deleted externally, the doc is cleared. If content matches, the reload is skipped (no-op). The dirty flag is cleared after reload since the doc now matches disk.
+   - `isDirty()` returns whether a room has unsaved user edits (exists in the `dirtyDocs` set).
+
+3. **`yjsHandler.ts` — Grace period reload + conditional cleanup save.**
+   - When `wasGracePeriod` is true, `handleConnection()` calls `reloadDocFromDisk()` before proceeding with the sync protocol. This picks up any external filesystem changes.
+   - The cleanup callback now checks `isDirty()` before saving. If the room has no unsaved edits, the save is skipped entirely, preventing stale content from overwriting externally modified files.
+
+### Lesson Learned
+In-memory document caches with grace periods must be **revalidated against the filesystem** when reactivated. A "last client disconnected → grace period → new client connects" cycle is equivalent to a fresh open from the user's perspective — the file may have changed externally. Additionally, cleanup routines should only write to disk if there are actual unsaved changes; unconditional saves can destroy external modifications made during the idle window.
+
+---
+
+## DEV-ISSUE-012: CRLF line endings cause text corruption in collaborative editor
+
+**Date**: 2026-03-05
+**Severity**: Critical — every edit visibly corrupts document content
+**Status**: Fixed
+**Affected files**: `src/server/services/fileService.ts`, `src/client/components/Editor/SourceEditor.tsx`
+
+### Symptom
+Opening a file in the source editor and inserting a new line (e.g. typing "An extra line in the middle" after "Keep your sidebar manageable") produced garbled output in the preview panel and other editor instances. Instead of appearing on a new line, the inserted text was spliced into the middle of the preceding line: `Keep your sidebar mAn extra line in the middleanageable`. The corruption worsened with every subsequent edit and was 100% reproducible on files with CRLF (`\r\n`) line endings.
+
+### Root Cause
+A **character-position mismatch** between Y.Text and CodeMirror caused by CRLF line endings.
+
+1. **Y.Text stored `\r\n` verbatim.** When `loadDocFromDisk()` read a file with CRLF line endings into Y.Text via `yText.insert(0, content)`, the `\r\n` sequences (2 characters each) were preserved in the CRDT.
+
+2. **CodeMirror normalised to `\n`.** CodeMirror 6 unconditionally converts all line separators to `\n` (1 character each) when constructing its internal document model. So `doc.length` was smaller than `yText.length` by exactly the number of line breaks.
+
+3. **y-codemirror.next used CodeMirror positions against Y.Text.** The `ySync` plugin in y-codemirror.next translates CodeMirror transaction changes into Y.Text operations using CM's character offsets (e.g. `ytext.insert(fromA + adj, insertText)`). Because CM positions were systematically lower than the corresponding Y.Text positions (off by the accumulated `\r` count before the cursor), every insert/delete operation landed at the wrong location in the CRDT — producing the observed text-splicing corruption.
+
+Diagnostic evidence: on a file with 22 line breaks, `yText.toJSON().length` was 469 while `doc.length` was 447 (difference = 22 = number of `\r` characters).
+
+### Diagnosis
+1. Initial hypothesis (CodeMirror `history()` conflicting with yCollab's undo manager) led to a useful cleanup but did not fix the bug.
+2. Added diagnostic logging: Y.Text observer printing deltas + insert positions, and a CM `updateListener` comparing `doc.length` vs `yText.length` on every transaction.
+3. On first load, the observer showed `\r\n` in the Y.Text delta insert, and the length mismatch (469 vs 447) immediately identified CRLF as the root cause.
+4. Confirmed the difference (22) exactly matched the number of line breaks in the file.
+
+### Fix
+Two changes:
+
+1. **`fileService.ts` — Normalise line endings at the read boundary.**
+   `readFileContent()` now strips `\r` from all line endings before returning content. This is the single point where disk content enters the Y.js system, so the fix covers all paths (initial load, grace-period reload, etc.):
+   ```typescript
+   export async function readFileContent(docsRoot: string, relativePath: string): Promise<string> {
+     const fullPath = safePath(docsRoot, relativePath);
+     const raw = await fs.readFile(fullPath, 'utf-8');
+     return raw.replace(/\r\n?/g, '\n');
+   }
+   ```
+
+2. **`SourceEditor.tsx` — Replace CodeMirror `history()` with yCollab undo manager.**
+   Removed the built-in `history()` extension and `historyKeymap` which conflicted with y-codemirror.next's own undo manager (both intercepted Ctrl+Z/Y, causing position confusion). Replaced with `yUndoManagerKeymap` from y-codemirror.next. This was a secondary fix — not the root cause, but eliminated a potential source of further position-tracking issues:
+   ```typescript
+   import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+   // Removed: history() from extensions, historyKeymap from keymap
+   // Added: ...yUndoManagerKeymap in keymap
+   ```
+
+### Lesson Learned
+When bridging two text systems (Y.Text CRDT ↔ CodeMirror), **line-ending normalisation is mandatory at the ingestion boundary**. CodeMirror unconditionally normalises to `\n`, so any content entering Y.Text must match. A mismatch of even 1 character per line creates an accumulating offset that corrupts every subsequent position-based operation. The fix belongs at the lowest common entry point (file read), not scattered across consumers. Additionally, `\r\n` files will always exist in the wild (Windows, Git `autocrlf`), so this normalisation is not optional.
