@@ -647,3 +647,90 @@ The following items from the original Phase 1b plan are no longer needed:
 - **No conflict resolution UI**: Y.js CRDTs handle concurrent edits automatically. The CRDT semantics determine the outcome.
 - **Server restart loses Y.Doc state**: On restart, Y.Docs re-initialize from last saved markdown on disk. Up to 5 seconds of edits may be lost.
 - **No rich-text formatting toolbar**: Users write raw markdown in CodeMirror. Future: could add toolbar that inserts markdown syntax.
+
+---
+
+## Implementation Log — Minor Improvements
+
+### Date: 6 March 2026
+
+### Overview
+
+A batch of quality-of-life improvements requested in `docs/MINOR-IMPROVEMENTS.md`: file browser refresh button, resizable panels, username prompt with multi-window support, and scroll/cursor preservation on Source↔Preview toggle. These were implemented between Phase 1b and Phase 1c.
+
+### 11. File Browser Refresh Button
+
+**Feature**: Added a 🔄 refresh button in the file browser header bar, positioned before the New File and New Folder buttons.
+
+**Implementation**: Single button added to `FileBrowser.tsx` that calls the existing `refresh` prop (from `useFileTree`). No new dependencies or state.
+
+**Files changed**: `src/client/components/FileBrowser/FileBrowser.tsx`
+
+### 12. Resizable Panel Layout
+
+**Feature**: Left (file browser) and right (chat) panels can be resized by dragging a vertical handle between them and the centre editor panel. Panels have a minimum width of 150px.
+
+**Implementation**:
+- Created `ResizeHandle.tsx` — a generic vertical drag handle that captures pointer events on mousedown and fires `onResize(deltaX)` callbacks during mousemove
+- `App.tsx` manages `leftWidth` and `rightWidth` state (defaults: 250px, 300px) and passes resize handlers to two `ResizeHandle` instances
+- Side panels switched from fixed CSS `width` to inline `style={{ width }}` with `flex-shrink: 0`
+- CSS `.resize-handle` class: 5px wide, transparent until hover/active (turns indigo `#4f46e5`)
+- `cursor: col-resize` applied to `document.body` during drag and `user-select: none` prevents text selection during resize
+
+**Files created**: `src/client/components/ResizeHandle.tsx`
+**Files changed**: `src/client/App.tsx`, `src/client/styles/global.css`
+
+### 13. Username Prompt, Storage & Change Dialog
+
+**Feature**: On first visit (no stored identity), a modal dialog prompts the user for a display name. The name and a random colour are stored in `localStorage` under `collab-editor-identity`. A "👤 Username" button in the editor toolbar lets users change their name at any time.
+
+**Implementation**:
+- Rewrote `useUserIdentity.ts`:
+  - No longer requires an `Awareness` argument — it became a pure identity/session hook
+  - Returns `needsPrompt` (true when no stored identity), `dismissPrompt()`, `showChangeDialog`, `setShowChangeDialog`
+  - `loadStoredIdentity()` returns `null` (not a generated fallback) when localStorage is empty, triggering the prompt
+- Created `UsernameDialog.tsx` — reusable modal with auto-focus input, Enter/Escape handling, min-length validation
+- `App.tsx` renders both the first-visit prompt and the change-name dialog, gated by `needsPrompt` and `showChangeDialog`
+- `EditorPanel.tsx` accepts `sessionName` and `onChangeUsername` props, renders the username button in the toolbar
+- Identity is published to Y.js awareness in `EditorPanel.tsx` via `awareness.setLocalStateField('user', ...)`, reading colour from localStorage
+
+**Files created**: `src/client/components/UsernameDialog.tsx`
+**Files changed**: `src/client/hooks/useUserIdentity.ts`, `src/client/App.tsx`, `src/client/components/Editor/EditorPanel.tsx`, `src/client/styles/global.css`
+
+### 14. Multi-Window Same-User Detection
+
+**Feature**: If the same user (same `localStorage` identity) opens the app in multiple tabs/windows, subsequent tabs get an auto-generated suffix like "Alice (2)", "Alice (3)". The suffix is NOT saved to `localStorage` — only the session display name is affected.
+
+**Implementation**:
+- Each tab generates a unique `sessionId` via `crypto.randomUUID()` (stored in a ref, not persisted)
+- Uses `BroadcastChannel('collab-editor-presence')` to coordinate between same-origin tabs:
+  - On mount: sends `{ type: 'hello', sessionId, baseName }`, other tabs respond with `{ type: 'here', ... }`
+  - On name change: channel re-initialises (effect depends on `identity.name`)
+  - On unmount/beforeunload: sends `{ type: 'bye', sessionId, ... }`
+- `sessionName` is computed by sorting all session IDs with the same base name — the first (lexicographically) gets the plain name, others get a numeric suffix
+- Private/incognito windows have separate `localStorage`, so they naturally get a different identity with no suffix collision
+
+**Design decisions**:
+- `BroadcastChannel` is same-origin only, which is exactly what we need (same app, same localStorage)
+- The suffix is ephemeral — closing the suffixed tab immediately frees the suffix
+- If `BroadcastChannel` is unavailable (very old browsers), multi-window detection silently degrades — no suffix is added
+
+**Files changed**: `src/client/hooks/useUserIdentity.ts`
+
+### 15. Scroll & Cursor Position Preservation on Source↔Preview Toggle
+
+**Feature**: When switching between Source and Preview modes, the editor preserves its scroll position and cursor location instead of resetting to the top of the document.
+
+**Implementation**:
+- Previously, `EditorPanel` conditionally rendered either `SourceEditor` or `PreviewPanel` — switching modes unmounted one and mounted the other, destroying CodeMirror's internal state
+- Changed to a **dual-mount strategy**: both Source and Preview are rendered simultaneously once first activated, but the inactive one is hidden via `display: none`
+- `hasShownSource` and `hasShownPreview` state flags track whether each view has been activated at least once — views are only mounted on first activation (lazy), then kept alive
+- Hidden with inline `style={{ display: viewMode === 'source' ? 'flex' : 'none' }}` rather than conditional rendering
+- CSS `.editor-view-container` uses `position: absolute; inset: 0` so both views overlay the same space
+- When switching files, both flags reset and viewMode resets to 'source'
+
+**Trade-off**: Both views stay in the DOM and consume memory while the file is open. For a desktop editor this is negligible. The `PreviewPanel` still observes Y.Text changes in the background (debounced 300ms), keeping it up to date when revealed.
+
+**Future**: Side-by-side Source+Preview mode and synchronized scroll position between the two views are noted as future enhancements.
+
+**Files changed**: `src/client/components/Editor/EditorPanel.tsx`, `src/client/styles/global.css`

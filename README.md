@@ -1,6 +1,6 @@
 # Collab Editor
 
-A collaborative Markdown editor with a block-based WYSIWYG interface, file browser, and multi-tab support. Built with React, BlockNote, Express, and TypeScript.
+A collaborative Markdown editor with real-time multi-user editing (Y.js + WebSocket), AI chat assistant with streaming and surgical document editing, CodeMirror 6 source editor, and block-based preview. Built with React, Express, and TypeScript.
 
 ## Quick Start — Docker
 
@@ -69,7 +69,7 @@ This:
 | `Dockerfile` | Multi-stage build: builder (install + build) → production (runtime only) |
 | `docker-compose.yml` | Single `app` service on port 3000 with a named `docs` volume |
 | `docker-entrypoint.sh` | Seeds the docs volume with sample files if empty on first run |
-| `.env` | `DOCS_PATH=/app/docs`, `PORT=3000` |
+| `.env` | AI configuration variables (see Environment Variables) |
 
 ### Rebuild after code changes
 
@@ -96,64 +96,38 @@ docker compose logs -f app
 |----------|---------|---------|
 | `PORT` | `3000` | Server listening port |
 | `DOCS_PATH` | `/app/docs` (Docker) or `./docs` (local) | Directory containing Markdown files |
+| `AI_ENDPOINT` | _(unset — AI disabled)_ | OpenAI-compatible API base URL |
+| `AI_API_KEY` | _(unset)_ | API key for AI endpoint |
+| `AI_MODEL` | `gpt-4o` | Model identifier |
+| `AI_MAX_TOKENS` | `4096` | Max tokens per AI response |
+| `AI_CONTEXT_WINDOW` | `8192` | Context window budget (characters) |
+| `AI_TOOLS_ENABLED` | `true` | Enable AI tool-use for surgical edits |
+| `SYSTEM_PROMPT_PATH` | `docs/SYSTEM-PROMPT.md` | Path to AI system prompt file |
+
+`PORT` and `DOCS_PATH` are set in `docker-compose.yml` for Docker deployments. `.env` contains only AI settings (shared between Docker and dev mode).
 
 ## Project Structure
 
 ```
-├── .devcontainer/
-│   ├── Dockerfile              # Devcontainer: Ubuntu + Node.js 20 + Docker CLI
-│   └── devcontainer.json       # Devcontainer config with /tmp node_modules setup
-├── Dockerfile                  # Multi-stage Docker build (production)
-├── docker-compose.yml          # Single-service compose
-├── docker-entrypoint.sh        # Volume seeder
-├── package.json                # Dependencies and scripts
-├── tsconfig.json               # Client TypeScript config
-├── tsconfig.server.json        # Server TypeScript config
-├── vite.config.ts              # Vite bundler + dev proxy
-├── .env                        # Environment variables
-├── docs/                       # Sample documents (mounted volume in Docker)
-│   ├── AI-COLLABORATION.md     # Full requirements and build log
-│   ├── welcome.md
-│   └── example/
-│       └── nested-doc.md
-├── plans/                      # Implementation plans
-│   ├── phase-1a-plan.md
-│   └── source-mode-plan.md
-└── src/
-    ├── server/
-    │   ├── index.ts            # Express entry point
-    │   ├── routes/files.ts     # File CRUD REST API
-    │   └── services/fileService.ts  # Filesystem ops with path traversal protection
-    └── client/
-        ├── index.html          # SPA entry
-        ├── main.tsx            # React entry with MantineProvider
-        ├── App.tsx             # Three-panel layout
-        ├── styles/global.css   # All component styles
-        ├── hooks/
-        │   ├── useFileTree.ts  # File tree data fetching
-        │   └── useOpenFiles.ts # Open tabs state management
-        └── components/
-            ├── Editor/
-            │   ├── MarkdownEditor.tsx  # BlockNote + Source mode toggle
-            │   ├── EditorPanel.tsx     # Tab bar + active editor
-            │   ├── TabBar.tsx          # Tab bar component
-            │   └── Tab.tsx            # Single tab with dirty indicator
-            ├── FileBrowser/
-            │   ├── FileBrowser.tsx     # Tree view sidebar
-            │   ├── FileTreeItem.tsx    # Recursive tree node
-            │   └── NewFileDialog.tsx   # Create file/folder dialog
-            └── ChatPanel/
-                └── ChatPanel.tsx      # Placeholder (Phase 1c)
+src/
+  client/              React SPA (Vite)
+    components/        Editor, FileBrowser, ChatPanel
+    hooks/             useYjsProvider, useAiChat, useOpenFiles, etc.
+    styles/            global.css
+  server/              Express + WebSocket server
+    routes/            files.ts (CRUD), ai.ts (chat streaming)
+    services/          aiService, fileService, yjsPersistence, yjsService
+    ws/                yjsHandler.ts (Y.js WebSocket)
+docs/                  Markdown files (mounted volume in Docker)
+plans/                 Implementation plans and issue log
 ```
 
 ## Editor Modes
 
-The editor supports two modes, toggled per-tab via the **Rich / Source** buttons:
+The editor supports two modes, toggled per-tab via the **Source / Preview** buttons:
 
-- **Rich mode** (default): BlockNote WYSIWYG block editor
-- **Source mode**: Raw Markdown in a monospace textarea
-
-Content syncs bidirectionally on toggle. Both modes trigger the same save/dirty-tracking flow.
+- **Source mode** (default): CodeMirror 6 with collaborative cursors via Y.js binding
+- **Preview mode**: Read-only BlockNote rendering, updated live from Y.js state
 
 ## REST API
 
@@ -165,8 +139,18 @@ Content syncs bidirectionally on toggle. Both modes trigger the same save/dirty-
 | `POST` | `/api/files/*path` | `{ type: "file" \| "dir" }` | `{ success: true }` |
 | `PATCH` | `/api/files/*path` | `{ newPath: string }` | `{ success: true }` |
 | `DELETE` | `/api/files/*path` | — | `{ success: true }` |
+| `POST` | `/api/save/*path` | — | Forces Y.js doc save to disk |
+| `GET` | `/api/ai/config` | — | `{ enabled, model }` |
+| `GET` | `/api/ai/budget` | — | `{ contextWindow, maxTokens }` |
+| `POST` | `/api/ai/chat` | `{ filePath, messages, documentContent }` | SSE stream (`delta`, `edit`, `done` events) |
 
 All file paths are validated to prevent path traversal attacks.
+
+## WebSocket
+
+| Endpoint | Purpose |
+|----------|---------|
+| `ws://host:port/yjs/:roomName` | Y.js collaborative document sync (one room per file) |
 
 ## Keyboard Shortcuts
 
@@ -177,11 +161,13 @@ All file paths are validated to prevent path traversal attacks.
 
 ## Roadmap
 
-See the full requirements and build phases in [`docs/AI-COLLABORATION.md`](docs/AI-COLLABORATION.md).
+See the full requirements in [`docs/AI-COLLABORATION.md`](docs/AI-COLLABORATION.md) and detailed plans in [`plans/`](plans/).
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **1a** | ✅ Done | Single-user editor in Docker |
-| **1b** | Planned | Real-time collaboration (Y.js + WebSocket) |
-| **1c** | Planned | AI chat integration |
-| **2** | Planned | Git integration & polish |
+| **1b** | ✅ Done | Real-time collaboration (Y.js + WebSocket) |
+| **1c** | ✅ Done | AI chat integration |
+| **2a** | Planned | Local checkpoints |
+| **2b** | Planned | Table of contents |
+| **3** | Planned | Git integration & polish |
